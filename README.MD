@@ -18,6 +18,8 @@ Test:
 
 本SDK用于接收can数据帧，然后处理为自定义数据类型，没有包括数据偏移帧
 
+коммент на русском
+
 |说明 |文档|
 |---|---|
 |接口函数的详细说明|[Interface_V1 README](./asserts/V1/INTERFACE_V1.MD) <br> [Interface_V2 README](./asserts/V2/INTERFACE_V2.MD)|
