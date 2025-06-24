@@ -34,7 +34,7 @@ try:
     start_at = time.time()
     def _stop_pressed() -> bool:  # noqa: D401 – одностр.
         """True если пользователь нажал «s»/«S» без необходимости нажимать Enter."""
-        if time.time() - start_at > 10:
+        if time.time() - start_at > 20:
             return True
         return False
 except ImportError:  # POSIX
@@ -69,7 +69,7 @@ def record(json_path: Path, hz: int, can_name: str) -> None:
     arm.ConnectPort(can_init=False)
 
     # Переводим в режим drag-teach записи
-    arm.MotionCtrl_1(emergency_stop=0x00, track_ctrl=0x00, grag_teach_ctrl=0x01)
+    # arm.MotionCtrl_1(emergency_stop=0x00, track_ctrl=0x00, grag_teach_ctrl=0x01)
 
     period = 1.0 / hz
     data: List[List[int]] = []
@@ -82,7 +82,7 @@ def record(json_path: Path, hz: int, can_name: str) -> None:
         while True:
             js = arm.GetArmJointMsgs().joint_state
             gr = arm.GetArmGripperMsgs().gripper_state
-            data.append([
+            p = [
                 js.joint_1,
                 js.joint_2,
                 js.joint_3,
@@ -90,7 +90,9 @@ def record(json_path: Path, hz: int, can_name: str) -> None:
                 js.joint_5,
                 js.joint_6,
                 gr.grippers_angle,
-            ])
+            ]
+            data.append(p)
+            print(p)
             time.sleep(period)
             if _stop_pressed():
                 print("Команда остановки получена – завершаю запись…")
