@@ -15,8 +15,8 @@ from typing import (
 
 # import sys,os
 # sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../../')))
-from ..piper_protocol_base import C_PiperParserBase
-from ...piper_msgs.msg_v1 import (
+from protocol.piper_protocol_base import C_PiperParserBase
+from piper_msgs.msg_v1 import (
     ArmMsgType, 
     PiperMessage, 
     ArmMsgStatus, 

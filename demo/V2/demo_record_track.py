@@ -5,12 +5,12 @@
 Сценарий:
 1. Запустите скрипт:  python demo_record_track.py  out.json  [--hz 50] [--can can0]
 2. Рука автоматически переводится в режим drag-teach записи (MotionCtrl_1, grag_teach_ctrl=0x01).
-3. Физически перемещайте манипулятор по нужной траектории.
+3. Физически перемещайте манипулятор по нужной траектории (включая открытие-закрытие схвата).
 4. Для завершения записи нажмите клавишу «s» в терминале (без Enter) либо Ctrl+C.
-5. Скрипт сохранит коллектированный массив суставных углов в указанном JSON-файле.
+5. Скрипт сохранит коллектированный массив суставных углов + гриппер в указанном JSON-файле.
 
-Файл формируется как list[list[int, …]] где каждая точка – шесть целых значений
-(углы суставов в 0.001°).
+Файл формируется как list[list[int, …]] где каждая точка – семь целых значений:
+    6 углов суставов и угол гриппера (всё в 0.001° / 0.001 мм для гриппера).
 """
 
 from __future__ import annotations
@@ -22,20 +22,20 @@ import time
 from pathlib import Path
 from typing import List
 
-from piper_sdk.interface import C_PiperInterface_V2 as SDK
+from interface.piper_interface_v2 import C_PiperInterface_V2 as SDK
 
 # ---------------------------------------------------------------------------
 # Вспомогательные утилиты работы с клавиатурой (кросс-платформенно)
 # ---------------------------------------------------------------------------
 try:
     # Windows – используем msvcrt, не требует сторонних зависимостей.
-    import msvcrt  # type: ignore
-
+    # import msvcrt  # type: ignore
+    import time
+    start_at = time.time()
     def _stop_pressed() -> bool:  # noqa: D401 – одностр.
         """True если пользователь нажал «s»/«S» без необходимости нажимать Enter."""
-        if msvcrt.kbhit():
-            ch = msvcrt.getch()
-            return ch.lower() == b"s"
+        if time.time() - start_at > 10:
+            return True
         return False
 except ImportError:  # POSIX
     import select
@@ -81,6 +81,7 @@ def record(json_path: Path, hz: int, can_name: str) -> None:
     try:
         while True:
             js = arm.GetArmJointMsgs().joint_state
+            gr = arm.GetArmGripperMsgs().gripper_state
             data.append([
                 js.joint_1,
                 js.joint_2,
@@ -88,6 +89,7 @@ def record(json_path: Path, hz: int, can_name: str) -> None:
                 js.joint_4,
                 js.joint_5,
                 js.joint_6,
+                gr.grippers_angle,
             ])
             time.sleep(period)
             if _stop_pressed():
@@ -108,7 +110,7 @@ def record(json_path: Path, hz: int, can_name: str) -> None:
 
 def main() -> None:
     p = argparse.ArgumentParser(description="Record Piper trajectory to JSON")
-    p.add_argument("json", type=Path, help="Путь, куда сохранить файл траектории")
+    p.add_argument("--json", type=Path, default='out.json', help="Путь, куда сохранить файл траектории")
     p.add_argument("--hz", type=int, default=50, help="Частота сэмплирования, Гц")
     p.add_argument("--can", type=str, default=DEFAULT_CAN, help="CAN-интерфейс (socketcan)")
     args = p.parse_args()

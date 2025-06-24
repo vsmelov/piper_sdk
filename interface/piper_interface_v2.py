@@ -14,14 +14,14 @@ from typing_extensions import (
 from queue import Queue
 import threading
 import math
-from ..hardware_port.can_encapsulation import C_STD_CAN
-from ..protocol.protocol_v2 import C_PiperParserBase, C_PiperParserV2
-from ..piper_msgs.msg_v2 import *
-from ..kinematics import *
-from ..monitor import *
-from ..piper_param import *
-from ..version import PiperSDKVersion
-from .interface_version import InterfaceVersion
+from hardware_port.can_encapsulation import C_STD_CAN
+from protocol.protocol_v2 import C_PiperParserBase, C_PiperParserV2
+from piper_msgs.msg_v2 import *
+from kinematics import *
+from monitor import *
+from piper_param import *
+from version import PiperSDKVersion
+from interface.interface_version import InterfaceVersion
 
 class C_PiperInterface_V2():
     '''
