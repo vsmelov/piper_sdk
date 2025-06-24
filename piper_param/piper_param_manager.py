@@ -2,7 +2,7 @@ import copy
 from typing_extensions import (
     Literal,
 )
-from ..version import PiperSDKVersion
+from version import PiperSDKVersion
 
 class C_PiperParamManager():
     _instance = None
