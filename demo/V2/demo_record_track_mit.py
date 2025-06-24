@@ -45,51 +45,28 @@ import sys
 import time
 from pathlib import Path
 from typing import List
+from collections import deque
 
-from piper_sdk.interface import C_PiperInterface_V2 as SDK
+from interface.piper_interface_v2 import C_PiperInterface_V2 as SDK
 
-# ---------------------------------------------------------------------------
-# Кроссплатформенное чтение одиночного символа без блокировки (копия из оригинала)
-# ---------------------------------------------------------------------------
-try:
-    import msvcrt  # Windows-способ
+import time
 
-    def _stop_pressed() -> bool:  # noqa: D401
-        """True, если пользователь нажал «s»/«S» без Enter (Windows)."""
-        if msvcrt.kbhit():
-            ch = msvcrt.getch()
-            return ch.lower() == b"s"
-        return False
-except ImportError:  # POSIX
-    import select
-    import termios
-    import tty
-
-    _orig_attrs = termios.tcgetattr(sys.stdin)
-    tty.setcbreak(sys.stdin)
-
-    def _stop_pressed() -> bool:  # noqa: D401
-        """True, если в stdin появился символ «s»/«S» (POSIX)."""
-        dr, _, _ = select.select([sys.stdin], [], [], 0)
-        if dr:
-            ch = sys.stdin.read(1)
-            return ch.lower() == "s"
-        return False
-
-    import atexit
-
-    @atexit.register
-    def _restore_tty():
-        termios.tcsetattr(sys.stdin, termios.TCSADRAIN, _orig_attrs)
+start = time.time()
+def _stop_pressed() -> bool:  # noqa: D401
+    """True, если в stdin появился символ «s»/«S» (POSIX)."""
+    if time.time() - start >= 20:
+        return True
+    return False
 
 # ---------------------------------------------------------------------------
 
 DEFAULT_CAN = "can0"
-DEFAULT_KP = 10.0
+DEFAULT_KP = 100.0
 DEFAULT_KD = 0.8
+DEFAULT_LAG_STEPS = 5  # при 100 Гц ≈ 50 мс
 
 
-def record(json_path: Path, hz: int, kp: float, kd: float, can_name: str) -> None:
+def record(json_path: Path, hz: int, kp: float, kd: float, can_name: str, lag_steps: int) -> None:
     """Основная процедура записи траектории с MIT-контролем."""
     arm = SDK.get_instance(can_name)
     # Подключаемся (без re-init CAN)
@@ -101,6 +78,9 @@ def record(json_path: Path, hz: int, kp: float, kd: float, can_name: str) -> Non
 
     period = 1.0 / hz
     data: List[List[int]] = []
+
+    # Очерёдность последних измеренных углов. Длина = lag_steps.
+    lag_buffer: deque[List[float]] = deque(maxlen=max(lag_steps, 1))
 
     print(
         "MIT-режим активирован. Перемещайте руку (она податлива).\n"
@@ -121,8 +101,15 @@ def record(json_path: Path, hz: int, kp: float, kd: float, can_name: str) -> Non
             # 2) Конвертируем в радианы для MIT-команды
             joints_rad = [x / 1000 * math.pi / 180 for x in joints_deg_001]
 
-            # 3) Отправляем JointMitCtrl для каждого привода
-            for i, p in enumerate(joints_rad, start=1):
+            # 3) Обновляем буфер и выбираем опорную позицию с задержкой
+            lag_buffer.append(joints_rad)
+            if lag_steps == 0 or len(lag_buffer) < lag_steps:
+                pos_refs = joints_rad  # нет задержки (первые итерации)
+            else:
+                pos_refs = lag_buffer[0]  # самая старая запись → задержка
+
+            # 4) Отправляем JointMitCtrl для каждого привода
+            for i, p in enumerate(pos_refs, start=1):
                 arm.JointMitCtrl(
                     motor_num=i,
                     pos_ref=p,
@@ -132,10 +119,10 @@ def record(json_path: Path, hz: int, kp: float, kd: float, can_name: str) -> Non
                     t_ref=0.0,
                 )
 
-            # 4) Логируем точку (в градусах*1000 — как в исходном демо)
+            # 5) Логируем точку (в градусах*1000 — как в исходном демо)
             data.append(joints_deg_001)
 
-            # 5) Пауза до следующего цикла
+            # 6) Пауза до следующего цикла
             time.sleep(period)
 
             if _stop_pressed():
@@ -157,14 +144,15 @@ def record(json_path: Path, hz: int, kp: float, kd: float, can_name: str) -> Non
 
 def main() -> None:
     p = argparse.ArgumentParser(description="Record Piper trajectory in MIT mode")
-    p.add_argument("json", type=Path, help="Путь, куда сохранить файл траектории")
+    p.add_argument("--json", type=Path, default='out.json', help="Путь, куда сохранить файл траектории")
     p.add_argument("--hz", type=int, default=100, help="Частота цикла, Гц (MIT требует ≥50)")
     p.add_argument("--kp", type=float, default=DEFAULT_KP, help="Коэффициент Kp (жёсткость)")
     p.add_argument("--kd", type=float, default=DEFAULT_KD, help="Коэффициент Kd (демпфирование)")
     p.add_argument("--can", type=str, default=DEFAULT_CAN, help="CAN-интерфейс (socketcan)")
+    p.add_argument("--lag", type=int, default=DEFAULT_LAG_STEPS, help="Задержка опорной позиции, такты цикла (0 – без задержки)")
     args = p.parse_args()
 
-    record(args.json, args.hz, args.kp, args.kd, args.can)
+    record(args.json, args.hz, args.kp, args.kd, args.can, args.lag)
 
 
 if __name__ == "__main__":
