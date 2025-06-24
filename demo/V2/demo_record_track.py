@@ -99,7 +99,7 @@ def record(json_path: Path, hz: int, can_name: str) -> None:
         print("KeyboardInterrupt – завершаю запись…")
     finally:
         # Завершаем режим записи траектории
-        arm.MotionCtrl_1(0x00, 0x00, 0x02)
+        arm.ModeCtrl(ctrl_mode=0x00, move_mode=0x00, move_spd_rate_ctrl=0)
         arm.DisconnectPort()
 
     json_path.parent.mkdir(parents=True, exist_ok=True)
