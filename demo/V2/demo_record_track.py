@@ -72,7 +72,8 @@ def record(json_path: Path, hz: int, can_name: str) -> None:
     arm.MotionCtrl_1(emergency_stop=0x00, track_ctrl=0x00, grag_teach_ctrl=0x01)
 
     period = 1.0 / hz
-    data: List[List[int]] = []
+    data: List[List[int]] = []            # краткий трек (только углы + схват)
+    details: List[dict] = []              # расширенный лог со всеми телеметрическими данными
 
     print(
         "Запись траектории начата. Перемещайте руку. "
@@ -80,8 +81,13 @@ def record(json_path: Path, hz: int, can_name: str) -> None:
     )
     try:
         while True:
+            # --- получаем актуальные сообщения от SDK -------------------
             js = arm.GetArmJointMsgs().joint_state
             gr = arm.GetArmGripperMsgs().gripper_state
+            hs = arm.GetArmHighSpdInfoMsgs()
+            ls = arm.GetArmLowSpdInfoMsgs()
+
+            # -- краткая запись (только суставы + схват) ------------------
             data.append([
                 js.joint_1,
                 js.joint_2,
@@ -91,6 +97,87 @@ def record(json_path: Path, hz: int, can_name: str) -> None:
                 js.joint_6,
                 gr.grippers_angle,
             ])
+
+            # -- расширённая запись --------------------------------------
+            sample = {
+                "ts": time.time(),
+                "joints_deg001": [
+                    js.joint_1,
+                    js.joint_2,
+                    js.joint_3,
+                    js.joint_4,
+                    js.joint_5,
+                    js.joint_6,
+                ],
+                "gripper_deg001": gr.grippers_angle,
+                # High-speed feedback (каждый элемент – int из SDK)
+                "motor_speed_rpm": [
+                    hs.motor_1.motor_speed,
+                    hs.motor_2.motor_speed,
+                    hs.motor_3.motor_speed,
+                    hs.motor_4.motor_speed,
+                    hs.motor_5.motor_speed,
+                    hs.motor_6.motor_speed,
+                ],
+                "motor_current_ma": [
+                    hs.motor_1.current,
+                    hs.motor_2.current,
+                    hs.motor_3.current,
+                    hs.motor_4.current,
+                    hs.motor_5.current,
+                    hs.motor_6.current,
+                ],
+                "motor_pos_deg001": [
+                    hs.motor_1.pos,
+                    hs.motor_2.pos,
+                    hs.motor_3.pos,
+                    hs.motor_4.pos,
+                    hs.motor_5.pos,
+                    hs.motor_6.pos,
+                ],
+                "motor_effort_mNm": [
+                    hs.motor_1.effort,
+                    hs.motor_2.effort,
+                    hs.motor_3.effort,
+                    hs.motor_4.effort,
+                    hs.motor_5.effort,
+                    hs.motor_6.effort,
+                ],
+                # Low-speed feedback
+                "voltage_mv": [
+                    ls.motor_1.vol,
+                    ls.motor_2.vol,
+                    ls.motor_3.vol,
+                    ls.motor_4.vol,
+                    ls.motor_5.vol,
+                    ls.motor_6.vol,
+                ],
+                "foc_temp_c": [
+                    ls.motor_1.foc_temp,
+                    ls.motor_2.foc_temp,
+                    ls.motor_3.foc_temp,
+                    ls.motor_4.foc_temp,
+                    ls.motor_5.foc_temp,
+                    ls.motor_6.foc_temp,
+                ],
+                "motor_temp_c": [
+                    ls.motor_1.motor_temp,
+                    ls.motor_2.motor_temp,
+                    ls.motor_3.motor_temp,
+                    ls.motor_4.motor_temp,
+                    ls.motor_5.motor_temp,
+                    ls.motor_6.motor_temp,
+                ],
+                "bus_current_ma": [
+                    ls.motor_1.bus_current,
+                    ls.motor_2.bus_current,
+                    ls.motor_3.bus_current,
+                    ls.motor_4.bus_current,
+                    ls.motor_5.bus_current,
+                    ls.motor_6.bus_current,
+                ],
+            }
+            details.append(sample)
             time.sleep(period)
             if _stop_pressed():
                 print("Команда остановки получена – завершаю запись…")
@@ -103,9 +190,20 @@ def record(json_path: Path, hz: int, can_name: str) -> None:
         arm.DisconnectPort()
 
     json_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # -- сохраняем краткий трек ------------------------------------------
     with json_path.open("w", encoding="utf-8") as f:
         json.dump(data, f)
-    print(f"Сохранено {len(data)} точек в {json_path}")
+
+    # -- сохраняем расширённый лог ---------------------------------------
+    details_path = json_path.with_suffix('.details.json')
+    with details_path.open("w", encoding="utf-8") as f:
+        json.dump(details, f)
+
+    print(
+        f"Сохранено {len(data)} точек в {json_path}\n"
+        f"Сохранён детальный лог ({len(details)} точек) в {details_path}"
+    )
 
 
 def main() -> None:
