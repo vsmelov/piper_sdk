@@ -136,7 +136,11 @@ class PiperVoiceTerminal:
             if self._stop_listen:
                 self._stop_listen(wait_for_stop=False)
             self.terminal.left_arm.DisconnectPort()
-            self.terminal.right_arm.DisconnectPort()
+            if getattr(self.terminal, "right_arm", None):
+                try:
+                    self.terminal.right_arm.DisconnectPort()  # type: ignore[operator]
+                except Exception:
+                    pass
 
     # --------------------- SR callback -------------
     def _callback(self, recognizer: sr.Recognizer, audio: sr.AudioData):  # noqa: D401

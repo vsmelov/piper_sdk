@@ -21,6 +21,11 @@ to_start {full_name}                   – переместить в начал�
 to_end   {full_name}                   – переместить в конец трека
 
 play  {track1} {track2} …              – воспроизведение последовательности
+play_unsafe  {track1} …                – воспроизведение без проверок позы
+play_reverse parent child              – воспроизв. child→parent (проверка позы)
+play_reverse_unsafe parent child       – то же, но без проверок
+trim_end {track} [N]                   – удалить N последних точек (1 по умолч.)
+del_last [N]                           – удалить N последних файлов-треков
 viz   {track}                          – 3-D визуализация траектории
 
 {arm}: l / r / b  (left – can0, right – can1, both)
@@ -54,7 +59,7 @@ DELAY_BETWEEN_TRACKS = 3           # секунд паузы между трек
 # Значение суставов SDK измеряются в «0.001 °» (тысячных долях градуса).
 # Поэтому 1 ° = 1000 единиц SDK.
 # Будем считать «близко», если ошибка ≤ 3 °.
-TOLERANCE_ANGLE_DEG = 3
+TOLERANCE_ANGLE_DEG = 10
 # преобразуем в единицы SDK (int, чтобы не плодить float-ы)
 TOLERANCE_ANGLE_UNITS = TOLERANCE_ANGLE_DEG * 1000  # 3000 units = 3°
 
@@ -72,13 +77,14 @@ class PiperTerminal:
     """REPL для управления двумя роборуками."""
 
     def __init__(self) -> None:
-        # Инициализируем только левую руку (can0). Правая (can1) временно не используется.
+        # Инициализируем только одну руку (can0). Поддержка can1 временно отключена.
         self.left_arm = SDK.get_instance("can0")
-        self.right_arm = None  # заглушка
+        self.right_arm = None  # заглушка, чтобы внешний код мог обращаться к атрибуту
         try:
             self.left_arm.ConnectPort()
         except Exception as e:  # noqa: BLE001
             print("[WARN] Не удалось открыть CAN0:", e)
+        # Если понадобится переинициализация can1, раскомментируйте строки выше.
         # Запись
         self._rec_thread: Optional[threading.Thread] = None
         self._rec_stop = threading.Event()
@@ -92,17 +98,16 @@ class PiperTerminal:
 
     def cmd_enable(self, arm_code: str):
         for arm in self._select(arm_code):
-            arm.MotionCtrl_1(emergency_stop=0x02)  # снять стоп
             arm.EnableArm(7)
+            # Небольшая пауза, чтобы драйверы успели включиться
             time.sleep(0.2)
-            arm.ModeCtrl(ctrl_mode=0x01, move_mode=0x00, move_spd_rate_ctrl=50)
+            # Переводим контроллер в CAN-режим управления по суставам
+            arm.ModeCtrl(ctrl_mode=0x01, move_mode=0x01, move_spd_rate_ctrl=50)
         print("✓ EnableArm выполнен.")
 
     def cmd_disable(self, arm_code: str):
         for arm in self._select(arm_code):
             arm.DisableArm(7)
-            arm.MotionCtrl_1(emergency_stop=0x01)  # быстрый стоп
-            arm.ModeCtrl(ctrl_mode=0x00, move_mode=0x00, move_spd_rate_ctrl=0)
         print("✓ DisableArm выполнен.")
 
     # --------------------- list / tree
@@ -141,43 +146,13 @@ class PiperTerminal:
     # --------------------- to_start / to_end
     def cmd_to_start(self, full_name: str):
         data = self._load(full_name)
-        arm = self._arm_from_name(full_name)
-        self._move_smooth(arm, data[0])
+        self._send_point(self._arm_from_name(full_name), data[0])
         print("✓ to_start выполнено.")
 
     def cmd_to_end(self, full_name: str):
         data = self._load(full_name)
-        arm = self._arm_from_name(full_name)
-        self._move_smooth(arm, data[-1])
+        self._send_point(self._arm_from_name(full_name), data[-1])
         print("✓ to_end выполнено.")
-
-    def _move_smooth(self, arm, target_pt, steps: int = 100, hz: int = 50):
-        """Плавно ведёт руку к target_pt за ~steps/hz секунд."""
-        curr = self._current_point(arm)
-        diffs = [ (t - c) / steps for c, t in zip(curr, target_pt) ]
-
-        period = 1.0 / hz
-        # 1) Сбрасываем все возможные внутренние статусы после drag-teach
-        arm.MotionCtrl_1(grag_teach_ctrl=0x02)   # гарант. выход из teach
-        arm.MotionCtrl_1(track_ctrl=0x03)        # очистить текущую траекторию
-        arm.MotionCtrl_1(emergency_stop=0x02)    # снять e-stop если висел
-
-        # 2) Включаем сервоприводы и переходим в режим воспроизведения
-        arm.EnableArm(7)
-        time.sleep(0.3)  # даём драйверам подняться
-
-        # 3) CAN-контроль, MOVE J, MIT-off
-        arm.MotionCtrl_2(ctrl_mode=0x01, move_mode=0x01,
-                          move_spd_rate_ctrl=50, is_mit_mode=0x00)
-        time.sleep(0.1)
-
-        for i in range(1, steps + 1):
-            pt = [ int(c + d * i) for c, d in zip(curr, diffs) ]
-            arm.JointCtrl(*pt[:6])
-            arm.GripperCtrl(pt[6])
-            time.sleep(period)
-        # hold
-        arm.ModeCtrl(ctrl_mode=0x01, move_mode=0x00, move_spd_rate_ctrl=50)
 
     # --------------------- record / stop
     def cmd_record(self, *args: str):
@@ -307,10 +282,7 @@ class PiperTerminal:
                 })
                 time.sleep(period)
         finally:
-            # Выходим из режима drag-teach и удерживаем позицию
-            arm.MotionCtrl_1(grag_teach_ctrl=0x02)  # завершить режим записи
-            arm.EnableArm(7)
-            arm.ModeCtrl(ctrl_mode=0x01, move_mode=0x00, move_spd_rate_ctrl=50)
+            arm.ModeCtrl(ctrl_mode=0x00, move_mode=0x00, move_spd_rate_ctrl=0)
             _track_path(full_name).write_text(json.dumps(data))
             _details_path(full_name).write_text(json.dumps(details))
             print(f"[REC] Сохранено {len(data)} точек -> {_track_path(full_name)}.")
@@ -324,13 +296,32 @@ class PiperTerminal:
             if not curr.startswith(prev + "__"):
                 print(f"Ошибка порядка: '{curr}' не является потомком '{prev}'.")
                 return
-        # Проверка стартовой позиции
-        first_track_start = self._load(tracks[0])[0]
+        # -------- Проверяем положение руки --------
+        first_track_data = self._load(tracks[0])
+        start_pt = first_track_data[0]
+        end_pt = first_track_data[-1]
         arm0 = self._arm_from_name(tracks[0])
-        if not self._is_close(self._current_point(arm0), first_track_start):
-            print("[INFO] Перемещаю робота в начало трека…")
-            self._move_smooth(arm0, first_track_start)
-            time.sleep(0.2)
+
+        curr_pt = self._current_point(arm0)
+
+        print("Текущая точка:", curr_pt)
+        print("Начало трека :", start_pt)
+        print("Конец трека  :", end_pt)
+
+        close_to_start = self._is_close(curr_pt, start_pt)
+        close_to_end = self._is_close(curr_pt, end_pt)
+
+        print("≈ start?", close_to_start, "≈ end?", close_to_end)
+
+        if close_to_start and close_to_end:
+            print("[ABORT] Рука одновременно близка и к началу, и к концу – нелогично.")
+            return
+        if not close_to_start and not close_to_end:
+            print("[ABORT] Рука не в начале и не в конце трека. Приведите её в нужное положение.")
+            return
+        if close_to_end and not close_to_start:
+            print("[ABORT] Рука у конца трека. Используйте play_reverse или to_start.")
+            return
 
         for i, full_name in enumerate(tracks):
             data = self._load(full_name)
@@ -378,35 +369,39 @@ class PiperTerminal:
         code = code.lower()
         if code == "l":
             return (self.left_arm,)
+        # Попытка обратиться к неактивной правой руке – ошибка.
         if code in {"r", "b"}:
-            raise ValueError("Правая рука (can1) недоступна")
+            raise ValueError("Правая рука (can1) сейчас недоступна")
         raise ValueError("{arm} должен быть 'l'")
 
     def _arm_from_name(self, full_name: str):
         if full_name.startswith("left__"):
             return self.left_arm
         if full_name.startswith("right__"):
-            raise ValueError("Правая рука (can1) недоступна")
+            raise ValueError("Правая рука (can1) сейчас недоступна")
         raise ValueError("Имя должно начинаться с left__")
 
     def _send_point(self, arm, pt):
-        # гарантируем, что контроллер готов принять точку
-        arm.EnableArm(7)
-        arm.ModeCtrl(ctrl_mode=0x01, move_mode=0x01, move_spd_rate_ctrl=50)
-        time.sleep(0.05)
         arm.JointCtrl(*pt[:6])
         arm.GripperCtrl(pt[6])
 
     def _run_track(self, arm, data: List[List[int]], hz: int = 50):
         period = 1.0 / hz
-        arm.ModeCtrl(ctrl_mode=0x01, move_mode=0x01)
-        step = max(1, len(data)//1000)
-        for idx, pt in enumerate(data):
-            if idx % step != 0 and idx != len(data)-1:
-                continue
+        # 1) Снимаем возможный emergency-stop и включаем сервоприводы
+        arm.MotionCtrl_1(emergency_stop=0x02)
+        arm.EnableArm(7)
+        time.sleep(0.3)  # даём драйверам подняться
+
+        # 2) Переводим контроллер в CAN-управление по суставам (MOVE J)
+        arm.ModeCtrl(ctrl_mode=0x01, move_mode=0x01, move_spd_rate_ctrl=50)
+        time.sleep(0.1)  # дать прошивке применить режим
+
+        for pt in data:
             self._send_point(arm, pt)
             time.sleep(period)
-        arm.ModeCtrl(ctrl_mode=0x00, move_mode=0x00)
+
+        # 3) Переводим в позиционный HOLD-режим, чтобы моторы удерживали последнюю позу.
+        arm.ModeCtrl(ctrl_mode=0x01, move_mode=0x00, move_spd_rate_ctrl=50)
 
     # --------------------- geometry helpers
     def _current_point(self, arm):
@@ -457,7 +452,7 @@ class PiperTerminal:
                 print("[ARGS]", e)
             except Exception as e:  # noqa: BLE001
                 print("[ERROR]", e)
-        # корректно закрываем (только CAN0)
+        # корректно закрываем (только левая рука)
         self.left_arm.DisconnectPort()
 
     # --------------------- play_reverse
@@ -475,8 +470,7 @@ class PiperTerminal:
         current = self._current_point(arm)
         end_pt = self._load(track2)[-1]
         if not self._is_close(current, end_pt):
-            print("[INFO] Рука в конце трека – автоматически перемещаю в начало…")
-            self._move_smooth(arm, end_pt)
+            print("[ABORT] Рука не у конца второго трека (track2). Переместите в нужную позицию или to_end.")
             return
 
         seq = [track2, track1]
@@ -490,8 +484,102 @@ class PiperTerminal:
                 time.sleep(DELAY_BETWEEN_TRACKS)
         print("✓ Reverse-воспроизведение завершено.")
 
+    # --------------------- unsafe variants (без проверок)
+    def cmd_play_unsafe(self, *tracks: str):
+        """Воспроизведение без каких-либо проверок положения руки."""
+        if not tracks:
+            print("play_unsafe: требуется >=1 трек")
+            return
+        for i, full_name in enumerate(tracks):
+            data = self._load(full_name)
+            arm = self._arm_from_name(full_name)
+            print(f"[PLAY UNSAFE] {full_name} ({len(data)} pts)…")
+            self._run_track(arm, data)
+            if i < len(tracks) - 1:
+                time.sleep(DELAY_BETWEEN_TRACKS)
+
+    def cmd_play_reverse_unsafe(self, parent: str, child: str):
+        seq = [child, parent]
+        for i, full_name in enumerate(seq):
+            data = self._load(full_name)[::-1]
+            arm = self._arm_from_name(full_name)
+            print(f"[REV UNSAFE] {full_name} (rev, {len(data)} pts)…")
+            self._run_track(arm, data)
+            if i < len(seq) - 1:
+                time.sleep(DELAY_BETWEEN_TRACKS)
+
+    # --------------------- trim points from end
+    def cmd_trim_end(self, full_name: str, count: str = "1"):
+        """Удаляет последние <count> точек из файла трека.
+
+        Пример: trim_end left__pick_box 50
+        Без второго аргумента удаляет одну точку.
+        """
+        try:
+            n = int(count)
+            if n <= 0:
+                raise ValueError
+        except ValueError:
+            print("trim_end: <count> должно быть положительным целым числом")
+            return
+
+        path = _track_path(full_name)
+        if not path.exists():
+            print("Файл не найден:", path)
+            return
+
+        data = json.loads(path.read_text())
+        if n >= len(data):
+            print("В файле всего", len(data), "точек – удалить", n, "нельзя.")
+            return
+        for _ in range(n):
+            data.pop()
+        path.write_text(json.dumps(data))
+        print(f"✓ Удалено {n} точек. Осталось {len(data)}.")
+        # детали, если есть
+        det_path = _details_path(full_name)
+        if det_path.exists():
+            details = json.loads(det_path.read_text())
+            details = details[:-n]
+            det_path.write_text(json.dumps(details))
+            print("  details.json также сокращён.")
+
+    # --------------------- delete last recorded track(s)
+    def cmd_del_last(self, count: str = "1"):
+        """Удаляет <count> последних созданных *.json треков.
+
+        Без аргумента удаляет только самый свежий.
+        """
+        try:
+            n = int(count)
+            if n <= 0:
+                raise ValueError
+        except ValueError:
+            print("del_last: <count> должно быть положительным целым числом")
+            return
+
+        # Собираем список json-файлов, исключая *.details.json
+        files = [p for p in TRACK_DIR.glob("*.json") if not p.name.endswith(".details.json")]
+        if not files:
+            print("В каталоге нет треков для удаления.")
+            return
+
+        files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+        to_del = files[:n]
+        if not to_del:
+            print("Нет файлов для удаления.")
+            return
+
+        for p in to_del:
+            details = _details_path(p.stem)
+            p.unlink(missing_ok=True)
+            if details.exists():
+                details.unlink()
+            print("✓ Удалён", p.name)
+        print(f"✓ Удалено {len(to_del)} файлов.")
+
 
 # -------------------------------------------------------------------- MAIN
 if __name__ == "__main__":
     terminal = PiperTerminal()
-    terminal.repl() 
+    terminal.repl()
