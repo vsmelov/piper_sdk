@@ -45,69 +45,49 @@ import sys
 import time
 from pathlib import Path
 from typing import List
+from collections import deque
 
-from piper_sdk.interface import C_PiperInterface_V2 as SDK
+from interface.piper_interface_v2 import C_PiperInterface_V2 as SDK
 
 # ---------------------------------------------------------------------------
 # Кроссплатформенное чтение одиночного символа без блокировки (копия из оригинала)
 # ---------------------------------------------------------------------------
-try:
-    import msvcrt  # Windows-способ
+import time
+start = time.time()
+def _stop_pressed() -> bool:  # noqa: D401
+    """True, если в stdin появился символ «s»/«S» (POSIX)."""
+    if time.time() - start > 10:
+        return True
+    return False
 
-    def _stop_pressed() -> bool:  # noqa: D401
-        """True, если пользователь нажал «s»/«S» без Enter (Windows)."""
-        if msvcrt.kbhit():
-            ch = msvcrt.getch()
-            return ch.lower() == b"s"
-        return False
-except ImportError:  # POSIX
-    import select
-    import termios
-    import tty
-
-    _orig_attrs = termios.tcgetattr(sys.stdin)
-    tty.setcbreak(sys.stdin)
-
-    def _stop_pressed() -> bool:  # noqa: D401
-        """True, если в stdin появился символ «s»/«S» (POSIX)."""
-        dr, _, _ = select.select([sys.stdin], [], [], 0)
-        if dr:
-            ch = sys.stdin.read(1)
-            return ch.lower() == "s"
-        return False
-
-    import atexit
-
-    @atexit.register
-    def _restore_tty():
-        termios.tcsetattr(sys.stdin, termios.TCSADRAIN, _orig_attrs)
 
 # ---------------------------------------------------------------------------
 
 DEFAULT_CAN = "can0"
-DEFAULT_KP = 30.0
-DEFAULT_KD = 0.8
-DEFAULT_THRESH_DEG = 1.0  # порог, градусы, для обновления pos_ref
+DEFAULT_KP = 5.0
+DEFAULT_KD = 0.3
+DEFAULT_ALPHA = 0.1  # 0-0.3 – насколько быстро ref тянется к текущему положению (0=свободно)
 
 
-def record(json_path: Path, hz: int, kp: float, kd: float, can_name: str, threshold_deg: float) -> None:
+def record(json_path: Path, hz: int, kp: float, kd: float, alpha: float, can_name: str) -> None:
     """Основная процедура записи траектории с MIT-контролем."""
     arm = SDK.get_instance(can_name)
     # Подключаемся (без re-init CAN)
     arm.ConnectPort(can_init=False)
-
+    # Включаем все моторы, как в demo_play_track.py
+    arm.EnableArm(7)
+    time.sleep(0.5)  # даём драйверам подхватиться
+    
     # Переключаем контроллер в MIT-режим
     arm.MotionCtrl_2(ctrl_mode=0x01, move_mode=0x01, move_spd_rate_ctrl=0,
                      is_mit_mode=0xAD)
 
     period = 1.0 / hz
 
-    # -- Алгоритм удержания -----------------------------------------------
-    # ref_rad – «замороженные» опорные углы. Пока пользователь двигает звено
-    #   (расхождение > threshold), мы обновляем ref_rad. После отпускания
-    #   они перестают меняться ⇒ возникает PD-момент, держащий позицию.
-    ref_rad: List[float] | None = None  # установим после первого чтения
+    # --- Сглаженная ссылка --------------------------------------------------
+    ref_rad: List[float] | None = None
 
+    # -- Логирование данных -------------------------------------------------
     data: List[List[int]] = []
 
     print(
@@ -129,18 +109,14 @@ def record(json_path: Path, hz: int, kp: float, kd: float, can_name: str, thresh
             # 2) Конвертируем в радианы
             joints_rad = [x / 1000 * math.pi / 180 for x in joints_deg_001]
 
-            # 3) Инициализируем ref_rad на первом шаге
+            # 3) Обновляем скользящее ref_rad
             if ref_rad is None:
                 ref_rad = joints_rad.copy()
+            else:
+                for idx in range(6):
+                    ref_rad[idx] += (joints_rad[idx] - ref_rad[idx]) * alpha
 
-            # 4) Обновление ref_rad при активном перемещении руки
-            for idx, (ref, cur) in enumerate(zip(ref_rad, joints_rad)):
-                if abs(cur - ref) > math.radians(threshold_deg):
-                    # Пользователь сместил сустав за пределы dead-band –
-                    # принимаем новую цель.
-                    ref_rad[idx] = cur
-
-            # 5) Отправляем JointMitCtrl с ref_rad (замороженные).
+            # 4) Отправляем JointMitCtrl с ref_rad (плавно движущаяся ссылка)
             for i, p_ref in enumerate(ref_rad, start=1):
                 arm.JointMitCtrl(
                     motor_num=i,
@@ -151,10 +127,10 @@ def record(json_path: Path, hz: int, kp: float, kd: float, can_name: str, thresh
                     t_ref=0.0,
                 )
 
-            # 6) Логируем точку (в градусах*1000 — как в исходном демо)
+            # 5) Логируем точку (в градусах*1000 — как в исходном демо)
             data.append(joints_deg_001)
 
-            # 7) Пауза до следующего цикла
+            # 6) Пауза до следующего цикла
             time.sleep(period)
 
             if _stop_pressed():
@@ -176,16 +152,16 @@ def record(json_path: Path, hz: int, kp: float, kd: float, can_name: str, thresh
 
 def main() -> None:
     p = argparse.ArgumentParser(description="Record Piper trajectory in MIT mode")
-    p.add_argument("json", type=Path, help="Путь, куда сохранить файл траектории")
+    p.add_argument("--json", type=Path, default='out.json', help="Путь, куда сохранить файл траектории")
     p.add_argument("--hz", type=int, default=100, help="Частота цикла, Гц (MIT требует ≥50)")
     p.add_argument("--kp", type=float, default=DEFAULT_KP, help="Коэффициент Kp (жёсткость)")
     p.add_argument("--kd", type=float, default=DEFAULT_KD, help="Коэффициент Kd (демпфирование)")
-    p.add_argument("--thresh", type=float, default=DEFAULT_THRESH_DEG,
-                   help="Порог обновления цели (deg), dead-band для мягкости")
+    p.add_argument("--alpha", type=float, default=DEFAULT_ALPHA,
+                    help="Сглаживание (0 – свободно, 1 – жёстко следует). Рекомендуем 0.05-0.2")
     p.add_argument("--can", type=str, default=DEFAULT_CAN, help="CAN-интерфейс (socketcan)")
     args = p.parse_args()
 
-    record(args.json, args.hz, args.kp, args.kd, args.can, args.thresh)
+    record(args.json, args.hz, args.kp, args.kd, args.alpha, args.can)
 
 
 if __name__ == "__main__":

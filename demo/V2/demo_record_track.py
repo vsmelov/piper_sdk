@@ -34,7 +34,7 @@ try:
     start_at = time.time()
     def _stop_pressed() -> bool:  # noqa: D401 – одностр.
         """True если пользователь нажал «s»/«S» без необходимости нажимать Enter."""
-        if time.time() - start_at > 10:
+        if time.time() - start_at > 20:
             return True
         return False
 except ImportError:  # POSIX
@@ -69,7 +69,7 @@ def record(json_path: Path, hz: int, can_name: str) -> None:
     arm.ConnectPort(can_init=False)
 
     # Переводим в режим drag-teach записи
-    arm.MotionCtrl_1(emergency_stop=0x00, track_ctrl=0x00, grag_teach_ctrl=0x01)
+    # arm.MotionCtrl_1(emergency_stop=0x00, track_ctrl=0x00, grag_teach_ctrl=0x01)
 
     period = 1.0 / hz
     data: List[List[int]] = []            # краткий трек (только углы + схват)

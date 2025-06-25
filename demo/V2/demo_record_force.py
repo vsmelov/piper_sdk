@@ -43,32 +43,11 @@ from interface.piper_interface_v2 import C_PiperInterface_V2 as SDK
 # ---------------------------------------------------------------------------
 # Неблокирующее нажатие «s» для остановки (повторяет код из других демо)
 # ---------------------------------------------------------------------------
-try:
-    import msvcrt  # Windows
+import time
+start=time.time()
 
-    def _stop_pressed() -> bool:  # noqa: D401
-        if msvcrt.kbhit():
-            return msvcrt.getch().lower() == b"s"
-        return False
-except ImportError:  # POSIX
-    import select
-    import termios
-    import tty
-
-    _orig_attrs = termios.tcgetattr(sys.stdin)
-    tty.setcbreak(sys.stdin)
-
-    def _stop_pressed() -> bool:  # noqa: D401
-        dr, _, _ = select.select([sys.stdin], [], [], 0)
-        if dr:
-            return sys.stdin.read(1).lower() == "s"
-        return False
-
-    import atexit
-
-    @atexit.register
-    def _restore_tty():
-        termios.tcsetattr(sys.stdin, termios.TCSADRAIN, _orig_attrs)
+def _stop_pressed() -> bool:  # noqa: D401
+    return time.time() - start > 10
 
 # ---------------------------------------------------------------------------
 
@@ -184,6 +163,8 @@ def record_force(
 # --- CLI -------------------------------------------------------------------
 
 def main() -> None:
+    global DEFAULT_DURATION
+
     p = argparse.ArgumentParser(description="Force-compliant MIT demo (admittance)")
     p.add_argument("json", type=Path, nargs="?", default=Path("out.json"), help="Путь к JSON (default: out.json)")
     p.add_argument("--hz", type=int, default=DEFAULT_HZ, help="Частота цикла, Гц")
@@ -196,7 +177,6 @@ def main() -> None:
     args = p.parse_args()
 
     # передаём длительность через глобальную константу для простоты
-    global DEFAULT_DURATION
     DEFAULT_DURATION = args.duration
     record_force(args.json, args.hz, args.kp, args.kd, args.tau_thr, args.gain, args.can)
 
