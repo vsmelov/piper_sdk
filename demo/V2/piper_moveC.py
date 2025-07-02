@@ -8,7 +8,7 @@ from typing import (
     Optional,
 )
 import time
-from piper_sdk import *
+from interface.piper_interface_v2 import *
 
 def enable_fun(piper:C_PiperInterface_V2):
     '''
@@ -29,7 +29,7 @@ def enable_fun(piper:C_PiperInterface_V2):
             piper.GetArmLowSpdInfoMsgs().motor_4.foc_status.driver_enable_status and \
             piper.GetArmLowSpdInfoMsgs().motor_5.foc_status.driver_enable_status and \
             piper.GetArmLowSpdInfoMsgs().motor_6.foc_status.driver_enable_status
-        print("使能状态:",enable_flag)
+        print("Состояние включения:",enable_flag)
         piper.EnableArm(7)
         piper.GripperCtrl(0,1000,0x01, 0)
         print("--------------------")
@@ -46,7 +46,7 @@ def enable_fun(piper:C_PiperInterface_V2):
         exit(0)
 
 if __name__ == "__main__":
-    piper = C_PiperInterface_V2("can0")
+    piper = C_PiperInterface_V2()
     piper.ConnectPort()
     piper.EnableArm(7)
     enable_fun(piper=piper)

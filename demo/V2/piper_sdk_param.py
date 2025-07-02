@@ -5,10 +5,10 @@ from typing import (
     Optional,
 )
 import time
-from piper_sdk import *
+from interface.piper_interface_v2 import *
 
 if __name__ == "__main__":
-    piper = C_PiperInterface_V2("can0")
+    piper = C_PiperInterface_V2()
     piper.ConnectPort()
     print(piper.GetSDKJointLimitParam('j6'))
     print(piper.GetSDKGripperRangeParam())

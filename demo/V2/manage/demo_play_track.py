@@ -14,18 +14,23 @@ from __future__ import annotations
 import json
 import time
 from pathlib import Path
-
+from demo.V2.settings import CAN_NAME
 from interface.piper_interface_v2 import C_PiperInterface_V2 as SDK
 
-DEFAULT_CAN = "can0"
+DEFAULT_CAN = CAN_NAME
 
 # --- ПАРАМЕТРЫ ПО УМОЛЧАНИЮ ---
-JSON_PATH = Path("out.json")  # файл с траекторией
+JSON_PATH = Path("tracks_db/out.json")  # файл с траекторией в tracks_db подпапке
 HZ = 50
 CAN = DEFAULT_CAN
 
 
 def play(json_path: Path = JSON_PATH, hz: int = HZ, can_name: str = CAN) -> None:
+    # Look for file in tracks_db directory if not absolute path
+    if not json_path.is_absolute():
+        tracks_db_dir = Path.cwd() / "tracks_db"
+        json_path = tracks_db_dir / json_path.name
+
     with json_path.open("r", encoding="utf-8") as f:
         data = json.load(f)
     if not isinstance(data, list) or not data:
@@ -34,10 +39,24 @@ def play(json_path: Path = JSON_PATH, hz: int = HZ, can_name: str = CAN) -> None
     arm = SDK.get_instance(can_name)
     arm.ConnectPort(can_init=False)
 
+
+    # arm.MotionCtrl_1(0x02,0,0)  # 2 восстановление
+    # arm.MotionCtrl_2(0, 0, 0, 0x00)  # позиционно-скоростной режим
+
+    # arm.MotionCtrl_1(0x02,0,0)  # 2 восстановление
+    # time.sleep(0.5)
+    #
+    # exit()
+    # arm.MotionCtrl_2(0, 0, 0, 0x00)  # 3 озиционно-скоростной режим
+
     # Переключаем в режим CAN + Joint (MOVE J)
-    arm.EnableArm(7)  # включаем все двигатели
     time.sleep(0.5)  # дать драйверам включиться
-    arm.ModeCtrl(ctrl_mode=0x01, move_mode=0x01, move_spd_rate_ctrl=50, is_mit_mode=0x00)
+
+    # piper.GripperCtrl(0, 1000, 0x01, 0)
+    arm.EnableArm(7)  # включаем все двигатели
+    # arm.GripperCtrl(0, 1000, 0x01, 0)
+    arm.ModeCtrl(0x01, 0x01, 50, 0x00) # 1
+
     time.sleep(0.5)  # дать контроллеру переключиться
 
     period = 1.0 / hz

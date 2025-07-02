@@ -5,7 +5,7 @@
 from typing import (
     Optional,
 )
-from piper_sdk import *
+from interface.piper_interface_v2 import *
 
 # 测试代码
 if __name__ == "__main__":
@@ -13,6 +13,8 @@ if __name__ == "__main__":
     piper.ConnectPort()
     while True:
         import time
-        print(piper.GetArmStatus())
-        time.sleep(0.005)
+        s = piper.GetArmStatus()
+        print(str(s).strip())
+        print(f'====')
+        time.sleep(1)
         pass

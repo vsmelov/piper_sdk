@@ -23,6 +23,8 @@ from piper_param import *
 from version import PiperSDKVersion
 from interface.interface_version import InterfaceVersion
 
+from demo.V2.settings import CAN_NAME as DEFAULT_CAN_NAME
+
 class C_PiperInterface_V2():
     '''
     Piper interface class
@@ -49,8 +51,12 @@ class C_PiperInterface_V2():
             self.Hz: float = 0
             self.arm_status = ArmMsgStatus()
         def __str__(self):
-            return (f"time stamp:{self.time_stamp}\n"
-                    f"Hz:{self.Hz}\n"
+            # return (f"time stamp:{self.time_stamp}\n"
+            #         f"Hz:{self.Hz}\n"
+            #         f"{self.arm_status}\n")
+
+            # xxx vsm: we dont need ts here
+            return (f"Hz:{self.Hz}\n"
                     f"{self.arm_status}\n")
 
     class ArmEndPose():
@@ -426,7 +432,7 @@ class C_PiperInterface_V2():
         return cls._instances[key]
 
     def __init__(self,
-                 can_name:str="can0",
+                 can_name:str=DEFAULT_CAN_NAME,
                  judge_flag=True,
                  can_auto_init=True,
                  dh_is_offset: int = 0,

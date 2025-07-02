@@ -26,7 +26,7 @@ def enable_fun(piper:C_PiperInterface):
             piper.GetArmLowSpdInfoMsgs().motor_4.foc_status.driver_enable_status and \
             piper.GetArmLowSpdInfoMsgs().motor_5.foc_status.driver_enable_status and \
             piper.GetArmLowSpdInfoMsgs().motor_6.foc_status.driver_enable_status
-        print("使能状态:",enable_flag)
+        print("Состояние включения:",enable_flag)
         piper.EnableArm(7)
         piper.GripperCtrl(0,1000,0x01, 0)
         print("--------------------")
@@ -43,7 +43,7 @@ def enable_fun(piper:C_PiperInterface):
         exit(0)
 
 if __name__ == "__main__":
-    piper = C_PiperInterface("can0")
+    piper = C_PiperInterface("can_piper")
     piper.ConnectPort()
     piper.EnableArm(7)
     enable_fun(piper=piper)

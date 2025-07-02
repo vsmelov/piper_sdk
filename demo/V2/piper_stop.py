@@ -9,7 +9,7 @@ from typing import (
     Optional,
 )
 import time
-from piper_sdk import *
+from interface.piper_interface_v2 import *
 
 # 测试代码
 if __name__ == "__main__":

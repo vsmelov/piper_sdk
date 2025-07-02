@@ -6,9 +6,9 @@ from typing import (
     Optional,
 )
 import time
-from piper_sdk import *
+from interface.piper_interface_v2 import *
 
-def enable_fun(piper:C_PiperInterface_V2, enable:bool):
+def enable_fun(piper: C_PiperInterface_V2, enable: bool):
     '''
     使能机械臂并检测使能状态,尝试5s,如果使能超时则退出程序
     '''
@@ -37,7 +37,7 @@ def enable_fun(piper:C_PiperInterface_V2, enable:bool):
             enable_flag = any(enable_list)
             piper.DisableArm(7)
             piper.GripperCtrl(0,1000,0x02, 0)
-        print(f"使能状态: {enable_flag}")
+        print(f"Состояние включения: {enable_flag}")
         print(f"--------------------")
         if(enable_flag == enable):
             loop_flag = True
@@ -47,15 +47,12 @@ def enable_fun(piper:C_PiperInterface_V2, enable:bool):
             enable_flag = False
         # 检查是否超过超时时间
         if elapsed_time > timeout:
-            print(f"超时....")
+            print(f"timeout....")
             elapsed_time_flag = True
             enable_flag = False
             loop_flag = True
             break
         time.sleep(0.5)
-    resp = enable_flag
-    print(f"Returning response: {resp}")
-    return resp
 
 # 测试代码
 if __name__ == "__main__":
@@ -63,7 +60,3 @@ if __name__ == "__main__":
     piper.ConnectPort()
     import time
     flag = enable_fun(piper=piper, enable=True)
-    if(flag == True):
-        print("使能成功!!!!")
-        exit(0)
-    pass

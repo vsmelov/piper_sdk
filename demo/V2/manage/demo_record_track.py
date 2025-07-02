@@ -6,7 +6,7 @@
 1. Запустите скрипт:  python demo_record_track.py  out.json  [--hz 50] [--can can0]
 2. Рука автоматически переводится в режим drag-teach записи (MotionCtrl_1, grag_teach_ctrl=0x01).
 3. Физически перемещайте манипулятор по нужной траектории (включая открытие-закрытие схвата).
-4. Для завершения записи нажмите клавишу «s» в терминале (без Enter) либо Ctrl+C.
+4. Для завершения записи нажмите клавишу пробел (space) в терминале (без Enter) либо Ctrl+C.
 5. Скрипт сохранит коллектированный массив суставных углов + гриппер в указанном JSON-файле.
 
 Файл формируется как list[list[int, …]] где каждая точка – семь целых значений:
@@ -23,45 +23,40 @@ from pathlib import Path
 from typing import List
 
 from interface.piper_interface_v2 import C_PiperInterface_V2 as SDK
+from demo.V2.settings import CAN_NAME
 
-# ---------------------------------------------------------------------------
-# Вспомогательные утилиты работы с клавиатурой (кросс-платформенно)
-# ---------------------------------------------------------------------------
-try:
-    # Windows – используем msvcrt, не требует сторонних зависимостей.
-    # import msvcrt  # type: ignore
-    import time
-    start_at = time.time()
-    def _stop_pressed() -> bool:  # noqa: D401 – одностр.
-        """True если пользователь нажал «s»/«S» без необходимости нажимать Enter."""
-        if time.time() - start_at > 20:
-            return True
+# --- helpers -----------------------------------------------------------
+# Неблокирующее чтение клавиатуры; завершаем запись при нажатии пробела.
+import select
+import termios
+import tty
+
+
+def _stop_pressed() -> bool:  # noqa: D401 – одностр.
+    """Вернёт True, если пользователь нажал пробел (space) без клавиши Enter."""
+
+    # Если скрипт запущен не из интерактивного терминала (например, IDE/cron),
+    # stdin не является TTY – тогда просто игнорируем остановку по пробелу.
+    if not sys.stdin.isatty():
         return False
-except ImportError:  # POSIX
-    import select
-    import termios
-    import tty
 
-    _orig_attrs = termios.tcgetattr(sys.stdin)
-    tty.setcbreak(sys.stdin)  # немедленное чтение символа
-
-    def _stop_pressed() -> bool:  # noqa: D401
-        """True если в stdin появился символ «s»/«S» (работает в POSIX)."""
+    fd = sys.stdin.fileno()
+    # Сохраняем текущие настройки терминала, переходим в cbreak-режим,
+    # читаем символ (если он есть) и восстанавливаем настройки.
+    old_settings = termios.tcgetattr(fd)
+    try:
+        tty.setcbreak(fd)
         dr, _, _ = select.select([sys.stdin], [], [], 0)
-        if dr:
+        if dr:  # есть ввод от пользователя
             ch = sys.stdin.read(1)
-            return ch.lower() == "s"
-        return False
+            if ch == " ":
+                return True
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
 
-    import atexit
+    return False
 
-    @atexit.register
-    def _restore_tty():
-        termios.tcsetattr(sys.stdin, termios.TCSADRAIN, _orig_attrs)
-
-# ---------------------------------------------------------------------------
-
-DEFAULT_CAN = "can0"
+DEFAULT_CAN = CAN_NAME
 
 
 def record(json_path: Path, hz: int, can_name: str) -> None:
@@ -77,7 +72,7 @@ def record(json_path: Path, hz: int, can_name: str) -> None:
 
     print(
         "Запись траектории начата. Перемещайте руку. "
-        "Нажмите клавишу 's' для остановки или Ctrl+C."
+        "Нажмите пробел для остановки или Ctrl+C."
     )
     try:
         while True:
@@ -97,6 +92,7 @@ def record(json_path: Path, hz: int, can_name: str) -> None:
                 js.joint_6,
                 gr.grippers_angle,
             ])
+            print(data)
 
             # -- расширённая запись --------------------------------------
             sample = {
@@ -189,7 +185,12 @@ def record(json_path: Path, hz: int, can_name: str) -> None:
         arm.ModeCtrl(ctrl_mode=0x00, move_mode=0x00, move_spd_rate_ctrl=0)
         arm.DisconnectPort()
 
-    json_path.parent.mkdir(parents=True, exist_ok=True)
+    # Create tracks_db directory in current folder
+    tracks_db_dir = Path.cwd() / "tracks_db"
+    tracks_db_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Update json_path to be in tracks_db directory
+    json_path = tracks_db_dir / json_path.name
 
     # -- сохраняем краткий трек ------------------------------------------
     with json_path.open("w", encoding="utf-8") as f:

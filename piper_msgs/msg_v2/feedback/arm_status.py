@@ -248,7 +248,8 @@ class ArmMsgStatus:
                 f"Motion Status: {self.motion_status}\n"
                 f"Trajectory Num: {self.trajectory_num}\n"
                 f"Error Code: {self._err_code}\n"
-                f"Error Status: \n{self.err_status}\n")
+                # f"Error Status: \n{self.err_status}\n"
+        )
 
     def __repr__(self):
         return self.__str__()
