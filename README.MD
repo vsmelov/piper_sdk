@@ -7,7 +7,7 @@
 |![ubuntu18.04](https://img.shields.io/badge/Ubuntu-18.04-orange.svg)|![Pass](https://img.shields.io/badge/Pass-blue.svg)|
 |![ubuntu20.04](https://img.shields.io/badge/Ubuntu-20.04-orange.svg)|![Pass](https://img.shields.io/badge/Pass-blue.svg)|
 |![ubuntu22.04](https://img.shields.io/badge/Ubuntu-22.04-orange.svg)|![Pass](https://img.shields.io/badge/Pass-blue.svg)|
-
+.
 Test:
 
 |PYTHON |STATE|
@@ -17,6 +17,8 @@ Test:
 |![python3.10](https://img.shields.io/badge/Python-3.10-blue.svg)|![Pass](https://img.shields.io/badge/Pass-blue.svg)|
 
 本SDK用于接收can数据帧，然后处理为自定义数据类型，没有包括数据偏移帧
+
+коммент на русском
 
 |说明 |文档|
 |---|---|

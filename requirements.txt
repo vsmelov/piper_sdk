@@ -1,0 +1,18 @@
+keyboard==0.13.5
+msgpack==1.1.1
+numpy==2.3.0
+packaging==25.0
+piper_sdk==0.2.19
+pygame==2.6.1
+pyserial==3.5
+python-can==4.5.0
+typing_extensions==4.14.0
+wrapt==1.17.2
+matplotlib==3.8.4
+# openai==1.23.0
+# langchain==0.1.16
+# speechrecognition==3.10.0
+# whisper @ git+https://github.com/openai/whisper.git@v20240930
+# sounddevice==0.4.6
+# soundfile==0.12.1
+# elevenlabs==0.2.27

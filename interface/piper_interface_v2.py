@@ -14,14 +14,14 @@ from typing_extensions import (
 from queue import Queue
 import threading
 import math
-from ..hardware_port.can_encapsulation import C_STD_CAN
-from ..protocol.protocol_v2 import C_PiperParserBase, C_PiperParserV2
-from ..piper_msgs.msg_v2 import *
-from ..kinematics import *
-from ..monitor import *
-from ..piper_param import *
-from ..version import PiperSDKVersion
-from .interface_version import InterfaceVersion
+from hardware_port.can_encapsulation import C_STD_CAN
+from protocol.protocol_v2 import C_PiperParserBase, C_PiperParserV2
+from piper_msgs.msg_v2 import *
+from kinematics import *
+from monitor import *
+from piper_param import *
+from version import PiperSDKVersion
+from interface.interface_version import InterfaceVersion
 
 class C_PiperInterface_V2():
     '''
@@ -39,9 +39,10 @@ class C_PiperInterface_V2():
     class ArmStatus():
         '''
         机械臂状态二次封装类,增加时间戳
-        '''
-        '''
-        Piper Status Secondary Encapsulation Class, Add Timestamp
+
+        Piper Status Secondary Encapsulation Class – adds timestamp
+
+        Дополнительная обёртка статуса манипулятора; добавляет метку времени.
         '''
         def __init__(self):
             self.time_stamp: float = 0
@@ -55,9 +56,10 @@ class C_PiperInterface_V2():
     class ArmEndPose():
         '''
         机械臂末端姿态二次封装类,增加时间戳
-        '''
-        '''
-        Secondary Encapsulation Class for Robotic Arm End-Effector Pose, Add Timestamp
+
+        Secondary Encapsulation Class for Robotic Arm End-Effector Pose – adds timestamp
+
+        Дополнительная обёртка позы конца манипулятора; добавляет метку времени.
         '''
         def __init__(self):
             self.time_stamp: float=0
@@ -71,10 +73,11 @@ class C_PiperInterface_V2():
     class ArmJoint():
         '''
         机械臂关节角度和夹爪二次封装类,将夹爪和关节角度信息放在一起,增加时间戳
-        '''
-        '''
-        Secondary Encapsulation Class for Robotic Arm Joint Angles and Gripper, 
+
+        Secondary Encapsulation Class for Robotic Arm Joint Angles and Gripper,
         Combine Gripper and Joint Angle Information Together, Add Timestamp
+
+        Дополнительная обёртка: углы шести суставов и положение схвата; добавляет метку времени.
         '''
         def __init__(self):
             self.time_stamp: float=0
@@ -88,10 +91,11 @@ class C_PiperInterface_V2():
     class ArmGripper():
         '''
         机械臂关节角度和夹爪二次封装类,将夹爪和关节角度信息放在一起,增加时间戳
-        '''
-        '''
-        Secondary Encapsulation Class for Robotic Arm Joint Angles and Gripper, 
+
+        Secondary Encapsulation Class for Robotic Arm Joint Angles and Gripper,
         Combining Gripper and Joint Angle Information Together, with Timestamp
+
+        机械臂关节角度和夹爪二次封装类,将夹爪和关节角度信息放在一起,增加时间戳
         '''
         def __init__(self):
             self.time_stamp: float=0
@@ -105,9 +109,10 @@ class C_PiperInterface_V2():
     class ArmMotorDriverInfoHighSpd():
         '''
         机械臂电机驱动高速反馈信息
-        '''
-        '''
-        Robotic Arm Motor Driver High-Speed Feedback Information
+
+        Robotic Arm Motor-Driver High-Speed Feedback Information
+
+        Информация о высокоскоростной обратной связи драйверов моторов манипулятора.
         '''
         def __init__(self):
             self.time_stamp: float=0
@@ -131,9 +136,10 @@ class C_PiperInterface_V2():
     class ArmMotorDriverInfoLowSpd():
         '''
         机械臂电机驱动低速反馈信息
-        '''
-        '''
-        Robotic Arm Motor Driver Low-Speed Feedback Information
+
+        Robotic Arm Motor-Driver Low-Speed Feedback Information
+
+        Информация о низкоскоростной обратной связи драйверов моторов манипулятора.
         '''
         def __init__(self):
             self.time_stamp: float=0
@@ -159,7 +165,11 @@ class C_PiperInterface_V2():
         当前电机限制角度/最大速度
         '''
         '''
-        Current Motor Limit Angle/Maximum Speed
+        当前电机限制角度/最大速度
+
+        Current Motor Limit Angle / Maximum Speed
+
+        当前电机限制角度/最大速度
         '''
         def __init__(self):
             self.time_stamp: float=0
@@ -174,8 +184,12 @@ class C_PiperInterface_V2():
         0x477 Byte 0 = 0x01 -> 0x478
         '''
         '''
-        Current End-Effector Velocity/Acceleration Parameters
-        0x477 Byte 0 = 0x01 -> 0x478
+        当前末端速度/加速度参数
+
+        Current End-Effector Velocity / Acceleration parameters
+        (Request: 0x477 Byte0=0x01, response 0x478)
+
+        当前末端速度/加速度参数
         '''
         def __init__(self):
             self.time_stamp: float=0
@@ -190,8 +204,11 @@ class C_PiperInterface_V2():
         0x477 Byte 0 = 0x02 -> 0x47B
         '''
         '''
-        Collision Protection Level Setting Feedback Command
-        0x477 Byte 0 = 0x02 -> 0x47B
+        碰撞防护等级设置反馈指令
+
+        Collision-Protection Level feedback (response frame 0x47B for request 0x477 Byte0=0x02)
+
+        碰撞防护等级设置反馈指令
         '''
         def __init__(self):
             self.time_stamp: float=0
@@ -206,8 +223,11 @@ class C_PiperInterface_V2():
         0x477 Byte 0 = 0x04 -> 0x47E
         '''
         '''
-        Gripper/Teaching Pendant Parameter Feedback Command
-        0x477 Byte 0 = 0x04 -> 0x47E
+        夹爪/示教器参数反馈指令
+
+        Gripper / Teaching-Pendant parameter feedback (response 0x47E for request 0x477 Byte0=0x04)
+
+        夹爪/示教器参数反馈指令
         '''
         def __init__(self):
             self.time_stamp: float=0
@@ -221,7 +241,11 @@ class C_PiperInterface_V2():
         反馈当前电机最大加速度限制
         '''
         '''
+        反馈当前电机最大加速度限制
+
         Feedback Current Motor Maximum Acceleration Limit
+
+        反馈当前电机最大加速度限制
         '''
         def __init__(self):
             self.time_stamp: float=0
@@ -236,8 +260,14 @@ class C_PiperInterface_V2():
         这个是主臂发送的消息，用来读取发送给从臂的目标值
         '''
         '''
-        Secondary Encapsulation Class for Robotic Arm Joint Angles and Gripper, Combining Gripper and Joint Angle Information, Adding Timestamp
-        This is the message sent by the main arm to read the target values sent to the slave arm.
+        机械臂关节角度和夹爪二次封装类,将夹爪和关节角度信息放在一起,增加时间戳
+        这个是主臂发送的消息，用来读取发送给从臂的目标值
+
+        Secondary Encapsulation of JointCtrl message (0x155-0x157)
+        sent by the master arm; target values for the slave arm.
+
+        机械臂关节角度和夹爪二次封装类,将夹爪和关节角度信息放在一起,增加时间戳
+        这个是主臂发送的消息，用来读取发送给从臂的目标值
         '''
         def __init__(self):
             self.time_stamp: float=0
@@ -254,8 +284,13 @@ class C_PiperInterface_V2():
         这个是主臂发送的消息，用来读取发送给从臂的目标值
         '''
         '''
-        Secondary Encapsulation Class for Robotic Arm Joint Angles and Gripper, Combining Gripper and Joint Angle Information, Adding Timestamp
-        This is a message sent by the main arm to read the target values sent to the slave arm.
+        机械臂关节角度和夹爪二次封装类,将夹爪和关节角度信息放在一起,增加时间戳
+        这个是主臂发送的消息，用来读取发送给从臂的目标值
+
+        Secondary Encapsulation of GripperCtrl message (0x159) sent by master arm.
+
+        机械臂关节角度和夹爪二次封装类,将夹爪和关节角度信息放在一起,增加时间戳
+        这个是主臂发送的消息，用来读取发送给从臂的目标值
         '''
         def __init__(self):
             self.time_stamp: float=0
@@ -271,7 +306,11 @@ class C_PiperInterface_V2():
         机械臂发送控制指令0x151的消息接收,由主臂发送
         '''
         '''
-        The control command message 0x151 is sent by the main arm for reception
+        机械臂发送控制指令0x151的消息接收,由主臂发送
+
+        Receiver for control command 0x151 (Mode/MotionCtrl_2) sent by master arm.
+
+        机械臂发送控制指令0x151的消息接收,由主臂发送
         '''
         def __init__(self):
             self.time_stamp: float=0
@@ -287,7 +326,11 @@ class C_PiperInterface_V2():
         全部电机最大加速度限制,带时间戳
         '''
         '''
-        The maximum acceleration limit for all motors, with a timestamp.
+        全部电机最大加速度限制,带时间戳
+
+        Maximum acceleration limit of all motors (response 0x47C) with timestamp.
+
+        全部电机最大加速度限制,带时间戳
         '''
         def __init__(self):
             self.time_stamp: float=0
@@ -301,7 +344,11 @@ class C_PiperInterface_V2():
         所有电机限制角度/最大速度,带时间戳
         '''
         '''
-        The angular/maximum speed limits for all motors, with a timestamp.
+        所有电机限制角度/最大速度,带时间戳
+
+        Angle/maximum speed limits of all motors (response 0x473) with timestamp.
+
+        所有电机限制角度/最大速度,带时间戳
         '''
         def __init__(self):
             self.time_stamp: float=0
@@ -315,7 +362,11 @@ class C_PiperInterface_V2():
         机械臂时间戳
         '''
         '''
-        piper msgs timestamp
+        机械臂时间戳
+
+        Timestamp helper storing latest CAN-frame times for different message groups.
+
+        机械臂时间戳
         '''
         def __init__(self):
             self.time_stamp_arm_status:float=0
@@ -353,7 +404,7 @@ class C_PiperInterface_V2():
             self.time_stamp_motor_angle_limit_max_spd_5=0
             self.time_stamp_motor_angle_limit_max_spd_6=0
     
-    _instances = {}  # 存储不同参数的实例
+    _instances = {}  # Хранит экземпляры интерфейса с различными параметрами
 
     def __new__(cls, 
                 can_name:str="can0", 
@@ -363,9 +414,9 @@ class C_PiperInterface_V2():
                 start_sdk_joint_limit: bool = True,
                 start_sdk_gripper_limit: bool = True):
         """
-        实现单例模式：
-        - 相同 can_name & can_auto_init 参数，只会创建一个实例
-        - 不同参数，允许创建新的实例
+        Реализация паттерна Singleton
+        – Если переданы одинаковые `can_name` и `can_auto_init`, возвращается уже существующий экземпляр.
+        – При отличающихся параметрах создаётся новый.
         """
         key = (can_name)  # 生成唯一 Key
         if key not in cls._instances:
@@ -399,8 +450,8 @@ class C_PiperInterface_V2():
         # protocol
         self.__parser: Type[C_PiperParserBase] = C_PiperParserV2()
         # thread
-        self.__read_can_stop_event = threading.Event()  # 控制 ReadCan 线程
-        self.__can_monitor_stop_event = threading.Event()  # 控制 CanMonitor 线程
+        self.__read_can_stop_event = threading.Event()  # флаг остановки потока ReadCan
+        self.__can_monitor_stop_event = threading.Event()  # флаг остановки потока CanMonitor
         self.__lock = threading.Lock()  # 保护线程安全
         self.__can_deal_th = None
         self.__can_monitor_th = None
@@ -525,21 +576,23 @@ class C_PiperInterface_V2():
             self.__can_monitor_stop_event.clear()  # 允许线程运行
         # 读取can数据线程
         def ReadCan():
+            """Фоновый цикл чтения CAN. Завершается, когда выставлен stop-флаг."""
             while not self.__read_can_stop_event.is_set():
                 try:
                     self.__arm_can.ReadCanMessage()
                 except can.CanOperationError:
-                    print("[ERROR] CAN 端口关闭，停止 ReadCan 线程")
+                    print("[ERROR] CAN-порт закрыт, останавливаю поток ReadCan")
                     break
                 except Exception as e:
-                    print(f"[ERROR] ReadCan() 发生异常: {e}")
+                    print(f"[ERROR] Исключение в ReadCan(): {e}")
                     break
         def CanMonitor():
+            """Контрольная задача: подсчёт FPS и проверка связи."""
             while not self.__can_monitor_stop_event.is_set():
                 try:
                     self.__CanMonitor()
                 except Exception as e:
-                    print(f"[ERROR] CanMonitor() 发生异常: {e}")
+                    print(f"[ERROR] Ошибка в CanMonitor(): {e}")
                     break
                 self.__can_monitor_stop_event.wait(0.01)
         try:
@@ -570,9 +623,10 @@ class C_PiperInterface_V2():
             self.__read_can_stop_event.set()
 
         if hasattr(self, 'can_deal_th') and self.__can_deal_th.is_alive():
-            self.__can_deal_th.join(timeout=thread_timeout)  # 加入超时，避免无限阻塞
+            # Ждём завершения потока, но не дольше timeout
+            self.__can_deal_th.join(timeout=thread_timeout)
             if self.__can_deal_th.is_alive():
-                print("[WARN] ReadCan 线程未能在超时时间内退出！")
+                print("[WARN] Поток ReadCan не завершился за отведённое время!")
 
         # if hasattr(self, 'can_monitor_th') and self.__can_monitor_th.is_alive():
         #     self.__can_monitor_th.join(timeout=thread_timeout)
@@ -1629,7 +1683,7 @@ class C_PiperInterface_V2():
         
         ArmParamEnquiryAndConfig(param_enquiry=0x04)
         
-        CAN_ID:
+        CAN ID:
             0x47E
         '''
         '''
