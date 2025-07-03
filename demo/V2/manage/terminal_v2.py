@@ -48,6 +48,12 @@ SAFE_DIR = TRACK_DIR / "_safe"
 SAFE_DIR.mkdir(exist_ok=True)
 
 ZERO_POS_PATH = SAFE_DIR / "zero_position.json"
+# The gripper torque, in 0.001 N/m. Range 0-5000 (corresponds 0-5 N/m)
+GRIPPER_EFFORT = 4000
+
+# DANGEROUS constant: how much the gripper will additionally squeeze during playback.
+# Value is a fraction; resulting gripper angle is reduced by this coefficient (tightening).
+GRIPPER_TIGHT_COEFFICEINT = 0.01  # ⚠️ changing this may break grasp reliability
 
 # ---------- Настройки ----------
 DELAY_BETWEEN_TRACKS = 3  # секунд паузы между треками
@@ -144,14 +150,19 @@ class PiperTerminal:
         arm = SDK.get_instance(CAN_NAME)  # важно пересоздать руку (я хз почему)
         arm.ConnectPort(can_init=True)  # этот аргумент важен
 
+
         logging.info("DisableArm: id_mask=7")
         for i in range(10):  # быдлохак
             arm.DisableArm(7)
+            arm.GripperCtrl(0, 1000, 0x02, 0)  # Disable and clear error
             time.sleep(0.01)
+        logging.info("disabled probably")
+
 
         # это отвратительная копипаста из примера demo.V2
         def enable_fun(piper):
-            while True:
+            start = time.time()
+            while True and time.time() - start < 5:
                 enable_list = []
                 enable_list.append(piper.GetArmLowSpdInfoMsgs().motor_1.foc_status.driver_enable_status)
                 enable_list.append(piper.GetArmLowSpdInfoMsgs().motor_2.foc_status.driver_enable_status)
@@ -162,11 +173,12 @@ class PiperTerminal:
                 enable_list.append(piper.GetArmLowSpdInfoMsgs().motor_6.foc_status.driver_enable_status)
                 # enable_list.append()
                 gripper_status = piper.GetArmGripperMsgs().gripper_state.status_code
+                gripper_foc_status = str(piper.GetArmGripperMsgs().gripper_state.foc_status)
                 enable_flag = all(enable_list)
                 piper.EnableArm(7)
-                logging.info(f'enabling gripper, current status: {gripper_status}')
+                logging.info(f'enabling gripper, current status: {gripper_status}, {gripper_foc_status}')
                 # piper.GripperCtrl(0, 1000, 0x01, 0)
-                piper.GripperCtrl(0, 1000, 0x03, 0)
+                piper.GripperCtrl(50_000, 1000, 0x01, 0)
                 if enable_flag:
                     break
                 time.sleep(0.1)
@@ -189,9 +201,19 @@ class PiperTerminal:
             move_spd_rate_ctrl=50,
             is_mit_mode=0x00,
         )
-        arm.GripperCtrl(0, 1000, 0x01, 0)
+        arm.GripperCtrl(50_000, 1000, 0x01, 0)
         arm.ModeCtrl(0x01, 0x01, 50, 0x00)  # включаем контроль руки
         time.sleep(1)  # wait
+
+    # --------------------------------- util helpers ----------------------------------------------------
+    def _confirm_overwrite(self, path: Path) -> bool:
+        """Спрашивает у пользователя подтверждение на перезапись файла."""
+        try:
+            ans = input(f"Файл {path.name} уже существует. Перезаписать? [y/N] ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            logging.info("Отмена.")
+            return False
+        return ans == "y"
 
     # --------------------------------- motion helpers ---------------------------------------------------
     def _move_smooth(self, arm, target_pt, steps: int = 100, hz: int = 50) -> PiperResponse:
@@ -203,8 +225,7 @@ class PiperTerminal:
         logging.info(f'[SEND] sending points started')
         for i in range(steps):
             pt = [int(c + d * i) for c, d in zip(curr, diffs)]
-            arm.JointCtrl(*pt[:6])
-            arm.GripperCtrl(pt[6])
+            self._send_point(arm, pt)
             time.sleep(period)  # todo: too aggressive
         logging.info(f'[SEND] sending points finished')
 
@@ -405,9 +426,10 @@ class PiperTerminal:
         else:
             logging.info("record: требуется 1 или 2 аргумента.")
             return
-        if _track_path(full_name).exists():
-            logging.info("Файл уже существует – выберите другое имя.")
-            return
+        track_file = _track_path(full_name)
+        if track_file.exists():
+            if not self._confirm_overwrite(track_file):
+                return
         arm = self._arm_from_name(full_name)
         logging.info(f"[REC] {full_name} – перемещайте руку, 's' для стоп.")
         self._rec_stop.clear()
@@ -440,8 +462,8 @@ class PiperTerminal:
             return
         json_path = _zero_track_path(name)
         if json_path.exists():
-            logging.info("Файл уже существует – выберите другое имя.")
-            return
+            if not self._confirm_overwrite(json_path):
+                return
         arm = self.left_arm
         logging.info(f"[REC-SAFE] {json_path.name} – перемещайте руку, 's' для стоп.")
         self._rec_stop.clear()
@@ -647,10 +669,10 @@ class PiperTerminal:
         if not tracks:
             logging.info("play: требуется >=1 трек")
             return
-        for prev, curr in zip(tracks, tracks[1:]):
-            if not curr.startswith(prev + "__"):
-                logging.info(f"Ошибка порядка: '{curr}' не является потомком '{prev}'.")
-                return
+        # for prev, curr in zip(tracks, tracks[1:]):
+        #     if not curr.startswith(prev + "__"):
+        #         logging.info(f"Ошибка порядка: '{curr}' не является потомком '{prev}'.")
+        #         return
 
         # Проверка безопасности перед reset-ом
         arm0 = self._arm_from_name(tracks[0])
@@ -688,7 +710,11 @@ class PiperTerminal:
 
     def _send_point(self, arm, pt):
         arm.JointCtrl(*pt[:6])
-        arm.GripperCtrl(pt[6])
+        # Apply tightening if configured (>0)
+        grip_val = pt[6]
+        if GRIPPER_TIGHT_COEFFICEINT > 0:
+            grip_val = int(grip_val * (1 - GRIPPER_TIGHT_COEFFICEINT))
+        arm.GripperCtrl(grip_val, GRIPPER_EFFORT, 0x01, 0)
 
     def _prepare_track_play(self, arm):
         """Один раз перед отправкой траектории настраиваем режим."""
