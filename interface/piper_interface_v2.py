@@ -1134,12 +1134,13 @@ class C_PiperInterface_V2():
                 self.__is_ok = True
     
     def __CalJointSDKLimit(self, joint_value, joint_num:str):
-        if(self.__start_sdk_joint_limit):
-            j_min, j_max = self.GetSDKJointLimitParam(joint_num)
-            j_min = round(math.degrees(j_min) * 1000)
-            j_max = round(math.degrees(j_max) * 1000)
-            return max(j_min, min(joint_value, j_max))
-        else: return joint_value
+        # if(self.__start_sdk_joint_limit):
+        #     j_min, j_max = self.GetSDKJointLimitParam(joint_num)
+        #     j_min = round(math.degrees(j_min) * 1000)
+        #     j_max = round(math.degrees(j_max) * 1000)
+        #     return max(j_min, min(joint_value, j_max))
+        # else:
+        return joint_value
 
     def __CalGripperSDKLimit(self, gripper_val:int):
         if self.__start_sdk_gripper_limit:

@@ -53,7 +53,7 @@ GRIPPER_EFFORT = 4000
 
 # DANGEROUS constant: how much the gripper will additionally squeeze during playback.
 # Value is a fraction; resulting gripper angle is reduced by this coefficient (tightening).
-GRIPPER_TIGHT_COEFFICEINT = 0.01  # ⚠️ changing this may break grasp reliability
+GRIPPER_TIGHT_COEFFICEINT = 0.05  # ⚠️ changing this may break grasp reliability
 
 # ---------- Настройки ----------
 DELAY_BETWEEN_TRACKS = 3  # секунд паузы между треками
@@ -117,6 +117,7 @@ class PiperTerminal:
         r-0-track [name]            – записать безопасный Zero-трек
         check-0-pos                 – максимальная дельта от Zero-позиции
         check-0-track               – минимальная дельта до Zero-треков
+        get_track_range <name>      – min/max значений суставов по всему треку
     """
 
     def __init__(self) -> None:
@@ -204,6 +205,8 @@ class PiperTerminal:
         arm.GripperCtrl(50_000, 1000, 0x01, 0)
         arm.ModeCtrl(0x01, 0x01, 50, 0x00)  # включаем контроль руки
         time.sleep(1)  # wait
+
+        arm.SetSDKJointLimitParam('j6', -2.09439 - 0.1, 2.09439 + 0.1)
 
     # --------------------------------- util helpers ----------------------------------------------------
     def _confirm_overwrite(self, path: Path) -> bool:
@@ -409,6 +412,32 @@ class PiperTerminal:
                 f"{('margin','exceeded')[status=='FAIL']} by {diff_units} units (~{diff_deg:.3f}°) | "
                 f"worst joint #{best_worst_joint} | best point {best_pt}"
             )
+
+    def cmd_get_track_range(self, track: str):
+        """Показывает диапазоны (min/max) углов для каждого сустава по треку.
+
+        usage: get_track_range <track_name>
+        """
+        if not track:
+            logging.info("get_track_range: требуется имя трека")
+            return
+        try:
+            data = self._load(track)
+        except Exception as exc:
+            logging.error(f"[ERROR] {exc}")
+            return
+
+        # Инициализируем списки длиной 7 (6 суставов + захват)
+        mins = [math.inf] * 7
+        maxs = [-math.inf] * 7
+        for pt in data:
+            for i, val in enumerate(pt):
+                mins[i] = min(mins[i], val)
+                maxs[i] = max(maxs[i], val)
+
+        joint_names = ["j1", "j2", "j3", "j4", "j5", "j6", "gripper"]
+        for i, name in enumerate(joint_names):
+            logging.info(f"{name}: min={mins[i]}, max={maxs[i]}")
 
     # --------------------------------- record / stop ----------------------------------------------------
     def cmd_record(self, *args: str):
