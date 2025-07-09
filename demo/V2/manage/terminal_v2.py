@@ -4,7 +4,7 @@ import json
 import threading
 import time
 from pathlib import Path
-from typing import Dict, List, Optional, Callable
+from typing import Dict, List, Optional, Callable, Tuple
 import math
 from dataclasses import dataclass
 
@@ -34,6 +34,7 @@ else:
 from interface.piper_interface_v2 import C_PiperInterface_V2 as SDK
 from demo.V2.settings import CAN_NAME
 import logging
+from demo.V2.manage.track import TrackBase, TrackV2, TrackPoint
 
 # Configure logging
 logging.basicConfig(
@@ -84,26 +85,23 @@ def _details_path(full_name: str) -> Path:
 def _zero_track_path(name: str) -> Path:
     """
     Файл безопасного (zero) трека внутри SAFE_DIR.
-    Имя файла содержит два подчеркивания.
     """
-    return SAFE_DIR / f"zero_track__{name}.json"
+    return SAFE_DIR / f"zero_track_{name}.json"
 
 
 def _zero_track_details_path(name: str) -> Path:
     """
     Файл деталей безопасного (zero) трека внутри SAFE_DIR.
-    Имя файла содержит два подчеркивания.
     """
-    return SAFE_DIR / f"zero_track__{name}.details.json"
+    return SAFE_DIR / f"zero_track_{name}.details.json"
 
 
 def _list_zero_tracks() -> List[Path]:
     """
     Возвращает только основные файлы треков (без *.details.json).
-    Имя файла содержит два подчеркивания.
     """
     return sorted(
-        p for p in SAFE_DIR.glob("zero_track__*.json") if not p.name.endswith(".details.json")
+        p for p in SAFE_DIR.glob("zero_track_*.json") if not p.name.endswith(".details.json")
     )
 
 
@@ -115,6 +113,8 @@ class PiperResponse:
 
 
 class PiperTerminal:
+    # Track implementation to use by default (can be overridden in subclasses)
+    track_cls = TrackV2
     """REPL для управления одной (левой) роборукой.
 
     Команды:
@@ -448,8 +448,8 @@ class PiperTerminal:
         # Инициализируем списки длиной 7 (6 суставов + захват)
         mins = [math.inf] * 7
         maxs = [-math.inf] * 7
-        for pt in data:
-            for i, val in enumerate(pt):
+        for tp in data:
+            for i, val in enumerate(tp.coordinates):
                 mins[i] = min(mins[i], val)
                 maxs[i] = max(maxs[i], val)
 
@@ -533,12 +533,14 @@ class PiperTerminal:
         period = 1.0 / hz
         logging.info("MotionCtrl_1: grag_teach_ctrl=0x01   (start recording)")
         arm.MotionCtrl_1(grag_teach_ctrl=0x01)
-        data: List[List[int]] = []
-        details: List[dict] = []
+        data: List[List[int]] = []  # points only
+        details: List[dict] = []    # telemetry with ts (first field is ts)
+        _acq_times: List[float] = []  # seconds
         zero_start: Optional[float] = None
         zero_warned = False
         try:
             while not self._rec_stop.is_set():
+                _acq_start = time.perf_counter()
                 js = arm.GetArmJointMsgs().joint_state
                 gr = arm.GetArmGripperMsgs().gripper_state
                 curr_point = [
@@ -646,11 +648,28 @@ class PiperTerminal:
                         ],
                     }
                 )
+                _acq_end = time.perf_counter()
+                _acq_times.append(_acq_end - _acq_start)
                 time.sleep(period)
         finally:
             self._finalize_record(arm)
-            _track_path(full_name).write_text(json.dumps(data))
-            _details_path(full_name).write_text(json.dumps(details))
+            # Transform to (pt, ts) tuples expected by write_from_record
+            points_ts = [
+                (pt, d["ts"]) for pt, d in zip(data, details)
+            ]
+            # Report acquisition timing statistics
+            if _acq_times:
+                times_ms = [t * 1000 for t in _acq_times]
+                times_sorted = sorted(times_ms)
+                n = len(times_sorted)
+                p10 = times_sorted[int(n * 0.1)]
+                p90 = times_sorted[int(n * 0.9)-1]
+                logging.info(
+                    f"[REC-TIMING] samples={n}  min={min(times_ms):.2f} ms  p10={p10:.2f} ms  avg={sum(times_ms)/n:.2f} ms  p90={p90:.2f} ms  max={max(times_ms):.2f} ms"
+                )
+
+            # Persist using the configured track_cls
+            self.track_cls.write_from_record(full_name, points_ts, details)
             logging.info(
                 f"[REC] Сохранено {len(data)} точек -> {_track_path(full_name)}."
             )
@@ -734,7 +753,7 @@ class PiperTerminal:
             return
 
         # Теперь проверка стартовой позиции трека
-        first_track_start = self._load(tracks[0])[0]
+        first_track_start = self._load(tracks[0])[0].coordinates
         if not self._is_close_ignored(self._current_point(arm0), first_track_start):
             logging.info("[INFO] Перемещаю робота в начало трека…")
             if not self._safe_move_smooth(arm0, first_track_start):
@@ -748,10 +767,9 @@ class PiperTerminal:
                 break
 
             data = self._load(full_name)
-            details = self._load_details(full_name)
             arm = self._arm_from_name(full_name)
             logging.info(f"[PLAY] {full_name} ({len(data)} pts)…")
-            self._run_track(arm, data, details)
+            self._run_track(arm, data)
 
             if self._play_stop.is_set():
                 logging.info("[PLAY] Стоп запрошен – останавливаем дальнейшие треки.")
@@ -802,41 +820,66 @@ class PiperTerminal:
         arm.ModeCtrl(ctrl_mode=0x01, move_mode=0x01, move_spd_rate_ctrl=50)
         time.sleep(0.02)
 
-    def _run_track(self, arm, data: List[List[int]], details: Optional[List[dict]] = None, hz: int = 50):
-        """Play the given trajectory.
+    def _run_track(self, arm, data: List[TrackPoint], hz: int = 50):
+        """Play the given trajectory with accuracy gating.
 
-        If timestamps are provided in *details*, the playback speed will match the
-        original recording. Otherwise falls back to a fixed *hz* rate.
+        The next point will not be issued until the arm is within 0.2° (≈200 units)
+        of the previous one. A command is resent every 20 ms until that happens.
+        If 60 ms pass without success, a warning is emitted on every subsequent
+        resend.
         """
-        use_timestamps = bool(details)
-        if use_timestamps and len(details) != len(data):
-            logging.warning("[PLAY] details length mismatch – falling back to fixed hz mode")
-            use_timestamps = False
+        use_timestamps = True  # always rely on coordinates_timestamp
 
-        period = 1.0 / hz
         logging.info("ModeCtrl: ctrl_mode=0x01, move_mode=0x01   (start track)")
         self._prepare_track_play(arm)
         total_pts = len(data)
         last_pct = -10
-        # Мы больше не пропускаем точки, чтобы обеспечить корректный тайминг
-        started_at = time.time() if use_timestamps else None
-        first_ts = details[0]['ts'] if use_timestamps else None
 
-        for idx, pt in enumerate(data):
+        started_at = time.time() if use_timestamps else None
+        first_ts: float = data[0].coordinates_timestamp if use_timestamps else 0.0
+
+        for idx, tp in enumerate(data):
             if self._play_stop.is_set():
                 logging.info("[PLAY] Стоп запрошен – прерываем трек.")
                 break
 
+            # Synchronize with original timing (best-effort) before gating
             if use_timestamps:
-                target_offset = details[idx]['ts'] - first_ts
-                run_time = time.time() - started_at
-                delay = max(0.0, target_offset - run_time)
-                if delay > 0:
-                    time.sleep(delay)
-                self._send_point(arm, pt)
-            else:
-                self._send_point(arm, pt)
-                time.sleep(period)
+                target_offset = tp.coordinates_timestamp - first_ts
+                while True:
+                    run_time = time.time() - (started_at or 0.0)
+                    if run_time >= target_offset or self._play_stop.is_set():
+                        break
+                    time.sleep(0.001)
+
+            # -------------------- accuracy gating --------------------
+            first_send_ts = time.time()
+            last_send_ts = 0.0
+            warned = False
+
+            ensure_control_delay = 0.01
+            warning_after = 0.06
+            while True:
+                # Send control command every 10 ms
+                now = time.time()
+                if now - last_send_ts >= ensure_control_delay:
+                    self._send_point(arm, tp.coordinates)
+                    last_send_ts = now
+
+                # Check convergence
+                if self._is_close_strict(self._current_point(arm), tp.coordinates, tol=200):
+                    break
+
+                # Warn if exceeded warning_after from first attempt
+                if not warned and now - first_send_ts >= warning_after:
+                    logging.warning(
+                        f"[PLAY] Point {idx}: arm not in position after {warning_after} s – continuing retries"
+                    )
+                    warned = True
+
+                if self._play_stop.is_set():
+                    break
+                time.sleep(0.002)  # small sleep to avoid busy-loop
 
             pct = int((idx + 1) * 100 / total_pts)
             if pct // 10 > last_pct // 10:
@@ -873,27 +916,9 @@ class PiperTerminal:
         return PiperTerminal._max_delta_and_joint_ignored(pt_a, pt_b)[0] <= tol
 
     @staticmethod
-    def _load(full_name: str) -> List[List[int]]:
-        path = _track_path(full_name)
-        if not path.exists():
-            raise FileNotFoundError(path)
-        return json.loads(path.read_text())
-
-    @staticmethod
-    def _load_details(full_name: str) -> List[dict]:
-        """Load per-point metadata (including timestamps) for a track.
-
-        Returns an empty list if the *.details.json file is missing.
-        """
-        try:
-            path = _details_path(full_name)
-            if not path.exists():
-                return []
-            return json.loads(path.read_text())
-        except Exception:
-            # Any problem reading – degrade gracefully to empty list
-            logging.exception(f"[WARN] Failed to load details for {full_name}")
-            return []
+    def _load(full_name: str) -> List[TrackPoint]:
+        """Load trajectory as list of TrackPoint objects."""
+        return TrackBase.read_track(full_name).track_points
 
     # ---------------------------- Public API (GUI helpers) ----------------------------
     def list_tracks(self) -> List[str]:
