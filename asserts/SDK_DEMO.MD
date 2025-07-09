@@ -1,18 +1,18 @@
-# 有关sdk的所有demo
+# Все демо, связанные с SDK
 
-## 读取机械臂消息并打印
+## Чтение сообщений робота-манипулятора и их вывод
 
 ```python
 #!/usr/bin/env python3
 # -*-coding:utf8-*-
-# 注意demo无法直接运行，需要pip安装sdk后才能运行
-# 读取机械臂消息并打印,需要先安装piper_sdk
+# Обратите внимание: демо нельзя запустить напрямую, сначала установите sdk через pip
+# Считываем и выводим сообщения робота-манипулятора; предварительно необходимо установить piper_sdk
 from typing import (
     Optional,
 )
 from piper_sdk import *
 
-# 测试代码
+# Тестовый код
 if __name__ == "__main__":
     piper = C_PiperInterface()
     piper.ConnectPort()
@@ -23,13 +23,13 @@ if __name__ == "__main__":
         pass
 ```
 
-## 机械臂使能
+## Включение робота-манипулятора
 
 ```python
 #!/usr/bin/env python3
 # -*-coding:utf8-*-
-# 注意demo无法直接运行，需要pip安装sdk后才能运行
-# 使能机械臂
+# Обратите внимание: демо нельзя запустить напрямую, сначала установите sdk через pip
+# Включить робот-манипулятор
 from typing import (
     Optional,
 )
@@ -38,13 +38,13 @@ from piper_sdk import *
 
 def enable_fun(piper:C_PiperInterface, enable:bool):
     '''
-    使能机械臂并检测使能状态,尝试5s,如果使能超时则退出程序
+    Включить робот-манипулятор и проверить состояние включения; попытка 5 с, если по таймауту не удалось — выйти из программы
     '''
     enable_flag = False
     loop_flag = False
-    # 设置超时时间（秒）
+    # Установить тайм-аут (сек)
     timeout = 5
-    # 记录进入循环前的时间
+    # Сохраняем время входа в цикл
     start_time = time.time()
     elapsed_time_flag = False
     while not (loop_flag):
@@ -65,7 +65,7 @@ def enable_fun(piper:C_PiperInterface, enable:bool):
             enable_flag = any(enable_list)
             piper.DisableArm(7)
             piper.GripperCtrl(0,1000,0x02, 0)
-        print(f"使能状态: {enable_flag}")
+        print(f"Состояние включения: {enable_flag}")
         print(f"--------------------")
         if(enable_flag == enable):
             loop_flag = True
@@ -73,37 +73,37 @@ def enable_fun(piper:C_PiperInterface, enable:bool):
         else: 
             loop_flag = False
             enable_flag = False
-        # 检查是否超过超时时间
+        # Проверяем, не превышено ли время ожидания
         if elapsed_time > timeout:
-            print(f"超时....")
+            print(f"Таймаут....")
             elapsed_time_flag = True
             enable_flag = False
             loop_flag = True
             break
         time.sleep(0.5)
     resp = enable_flag
-    print(f"Returning response: {resp}")
+    print(f"Возвращаем ответ: {resp}")
     return resp
 
-# 测试代码
+# Тестовый код
 if __name__ == "__main__":
     piper = C_PiperInterface()
     piper.ConnectPort()
     import time
     flag = enable_fun(piper=piper, enable=False)
     if(flag == True):
-        print("失能成功!!!!")
+        print("Отключение успешно!!!!")
         exit(0)
     pass
 ```
 
-## 机械臂失能
+## Отключение робота-манипулятора
 
 ```python
 #!/usr/bin/env python3
 # -*-coding:utf8-*-
-# 注意demo无法直接运行，需要pip安装sdk后才能运行
-# 使能机械臂
+# Обратите внимание: демо нельзя запустить напрямую, сначала установите sdk через pip
+# Включить робот-манипулятор
 from typing import (
     Optional,
 )
@@ -112,13 +112,13 @@ from piper_sdk import *
 
 def enable_fun(piper:C_PiperInterface, enable:bool):
     '''
-    使能机械臂并检测使能状态,尝试5s,如果使能超时则退出程序
+    Включить робот-манипулятор и проверить состояние включения; попытка 5 с, если по таймауту не удалось — выйти из программы
     '''
     enable_flag = False
     loop_flag = False
-    # 设置超时时间（秒）
+    # Установить тайм-аут (сек)
     timeout = 5
-    # 记录进入循环前的时间
+    # Сохраняем время входа в цикл
     start_time = time.time()
     elapsed_time_flag = False
     while not (loop_flag):
@@ -139,7 +139,7 @@ def enable_fun(piper:C_PiperInterface, enable:bool):
             enable_flag = any(enable_list)
             piper.DisableArm(7)
             piper.GripperCtrl(0,1000,0x02, 0)
-        print(f"使能状态: {enable_flag}")
+        print(f"Состояние включения: {enable_flag}")
         print(f"--------------------")
         if(enable_flag == enable):
             loop_flag = True
@@ -147,45 +147,45 @@ def enable_fun(piper:C_PiperInterface, enable:bool):
         else: 
             loop_flag = False
             enable_flag = False
-        # 检查是否超过超时时间
+        # Проверяем, не превышено ли время ожидания
         if elapsed_time > timeout:
-            print(f"超时....")
+            print(f"Таймаут....")
             elapsed_time_flag = True
             enable_flag = False
             loop_flag = True
             break
         time.sleep(0.5)
     resp = enable_flag
-    print(f"Returning response: {resp}")
+    print(f"Возвращаем ответ: {resp}")
     return resp
 
-# 测试代码
+# Тестовый код
 if __name__ == "__main__":
     piper = C_PiperInterface()
     piper.ConnectPort()
     import time
     flag = enable_fun(piper=piper, enable=True)
     if(flag == True):
-        print("使能成功!!!!")
+        print("Включение успешно!!!!")
         exit(0)
     pass
 ```
 
-## 机械臂关节角读取
+## Чтение углов суставов робота-манипулятора
 
-没有夹爪可以注释夹爪部分
+Если нет захвата, можно закомментировать часть, связанную с захватом
 
 ```python
 #!/usr/bin/env python3
 # -*-coding:utf8-*-
-# 注意demo无法直接运行，需要pip安装sdk后才能运行
-# 读取机械臂消息并打印,需要先安装piper_sdk
+# Обратите внимание: демо нельзя запустить напрямую, сначала установите sdk через pip
+# Считываем и выводим сообщения робота-манипулятора; предварительно необходимо установить piper_sdk
 from typing import (
     Optional,
 )
 from piper_sdk import *
 
-# 测试代码
+# Тестовый код
 if __name__ == "__main__":
     piper = C_PiperInterface()
     piper.ConnectPort()
@@ -197,14 +197,15 @@ if __name__ == "__main__":
         pass
 ```
 
-## 机械臂关节角控制
+## Управление углами суставов робота-манипулятора
 
-没有夹爪可以注释夹爪部分
+Если нет захвата, можно закомментировать часть, связанную с захватом
 
 ```python
 #!/usr/bin/env python3
 # -*-coding:utf8-*-
-# 注意demo无法直接运行，需要pip安装sdk后才能运行
+# Обратите внимание: демо нельзя запустить напрямую, сначала установите sdk через pip
+# Включить робот-манипулятор и проверить состояние включения; попытка 5 с, если по таймауту не удалось — выйти из программы
 from typing import (
     Optional,
 )
@@ -213,12 +214,12 @@ from piper_sdk import *
 
 def enable_fun(piper:C_PiperInterface):
     '''
-    使能机械臂并检测使能状态,尝试5s,如果使能超时则退出程序
+    Включить робот-манипулятор и проверить состояние включения; попытка 5 с, если по таймауту не удалось — выйти из программы
     '''
     enable_flag = False
-    # 设置超时时间（秒）
+    # Установить тайм-аут (сек)
     timeout = 5
-    # 记录进入循环前的时间
+    # Сохраняем время входа в цикл
     start_time = time.time()
     elapsed_time_flag = False
     while not (enable_flag):
@@ -230,20 +231,20 @@ def enable_fun(piper:C_PiperInterface):
             piper.GetArmLowSpdInfoMsgs().motor_4.foc_status.driver_enable_status and \
             piper.GetArmLowSpdInfoMsgs().motor_5.foc_status.driver_enable_status and \
             piper.GetArmLowSpdInfoMsgs().motor_6.foc_status.driver_enable_status
-        print("使能状态:",enable_flag)
+        print("Состояние включения:",enable_flag)
         piper.EnableArm(7)
         piper.GripperCtrl(0,1000,0x01, 0)
         print("--------------------")
-        # 检查是否超过超时时间
+        # Проверяем, не превышено ли время ожидания
         if elapsed_time > timeout:
-            print("超时....")
+            print("Таймаут....")
             elapsed_time_flag = True
             enable_flag = True
             break
         time.sleep(1)
         pass
     if(elapsed_time_flag):
-        print("程序自动使能超时,退出程序")
+        print("Программа автоматически завершилась из-за тайм-аута включения")
         exit(0)
 
 if __name__ == "__main__":
@@ -288,54 +289,54 @@ if __name__ == "__main__":
         pass
 ```
 
-## 设置机械臂为主臂
+## Настройка робота-манипулятора как ведущего
 
 ```python
 #!/usr/bin/env python3
 # -*-coding:utf8-*-
-# 注意demo无法直接运行，需要pip安装sdk后才能运行
-# 设置机械臂为主动臂，直接设置即可
+# Обратите внимание: демо нельзя запустить напрямую, сначала установите sdk через pip
+# Установить робота-манипулятора в режим ведущего, достаточно просто задать параметр
 from typing import (
     Optional,
 )
 from piper_sdk import *
 import time
 
-# 测试代码
+# Тестовый код
 if __name__ == "__main__":
     piper = C_PiperInterface()
     piper.ConnectPort()
     piper.MasterSlaveConfig(0xFA, 0, 0, 0)
 ```
 
-## 设置机械臂为从臂
+## Настройка робота-манипулятора как ведомого
 
 ```python
 #!/usr/bin/env python3
 # -*-coding:utf8-*-
-# 注意demo无法直接运行，需要pip安装sdk后才能运行
-# 设置机械臂为从动臂
-# 注意，如果是在机械臂处于主动臂模式下，发送设置指令后需要重新启动机械臂
+# Обратите внимание: демо нельзя запустить напрямую, сначала установите sdk через pip
+# Установить робота-манипулятор в режим ведомого
+# Обратите внимание: если робот-манипулятор находится в режиме ведущего, после отправки команды настройки потребуется перезагрузка
 from typing import (
     Optional,
 )
 import time
 from piper_sdk import *
 
-# 测试代码
+# Тестовый код
 if __name__ == "__main__":
     piper = C_PiperInterface()
     piper.ConnectPort()
     piper.MasterSlaveConfig(0xFC, 0, 0, 0)
 ```
 
-## 读取机械臂的所有电机的最大加速度限制
+## Чтение максимального ограничения ускорения всех моторов манипулятора
 
 ```python
 #!/usr/bin/env python3
 # -*-coding:utf8-*-
-# 注意demo无法直接运行，需要pip安装sdk后才能运行
-# 读取机械臂的所有电机的最大加速度限制
+# Обратите внимание: демо нельзя запустить напрямую, сначала установите sdk через pip
+# Чтение максимального ограничения ускорения всех моторов манипулятора
 
 from typing import (
     Optional,
@@ -343,23 +344,23 @@ from typing import (
 import time
 from piper_sdk import *
 
-# 测试代码
+# Тестовый код
 if __name__ == "__main__":
     piper = C_PiperInterface()
     piper.ConnectPort()
     while True:
-        # piper.SearchAllMotorMaxAccLimit() # 这个函数放在ConnectPort中了，每次执行程序都会发送一次读取指令
+        # piper.SearchAllMotorMaxAccLimit() # Эта функция уже вызывается в ConnectPort, поэтому при каждом запуске программы будет отправляться запрос на чтение
         print(piper.GetAllMotorMaxAccLimit())
         time.sleep(0.01)
 ```
 
-## 读取机械臂的所有电机的最大角度和速度限制
+## Чтение максимальных ограничений угла и скорости всех моторов манипулятора
 
 ```python
 #!/usr/bin/env python3
 # -*-coding:utf8-*-
-# 注意demo无法直接运行，需要pip安装sdk后才能运行
-# 读取机械臂的所有电机的最大加速度限制
+# Обратите внимание: демо нельзя запустить напрямую, сначала установите sdk через pip
+# Чтение максимальных ограничений угла и скорости всех моторов манипулятора
 
 from typing import (
     Optional,
@@ -367,23 +368,23 @@ from typing import (
 import time
 from piper_sdk import *
 
-# 测试代码
+# Тестовый код
 if __name__ == "__main__":
     piper = C_PiperInterface()
     piper.ConnectPort()
     while True:
-        # piper.SearchAllMotorMaxAngleSpd() # 这个函数放在ConnectPort中了，每次执行程序都会发送一次读取指令
+        # piper.SearchAllMotorMaxAngleSpd() # Эта функция уже вызывается в ConnectPort, поэтому при каждом запуске программы будет отправляться запрос на чтение
         print(piper.GetAllMotorAngleLimitMaxSpd())
         time.sleep(0.01)
 ```
 
-## 机械臂重置
+## Сброс робота-манипулятора
 
 ```python
 #!/usr/bin/env python3
 # -*-coding:utf8-*-
-# 注意demo无法直接运行，需要pip安装sdk后才能运行
-# 设置机械臂重置，需要在mit或者示教模式切换为位置速度控制模式时执行
+# Обратите внимание: демо нельзя запустить напрямую, сначала установите sdk через pip
+# Сброс робота-манипулятора: следует выполнить при переключении из режима MIT или обучения в режим позиционно-скоростного управления
 
 from typing import (
     Optional,
@@ -391,21 +392,21 @@ from typing import (
 import time
 from piper_sdk import *
 
-# 测试代码
+# Тестовый код
 if __name__ == "__main__":
     piper = C_PiperInterface()
     piper.ConnectPort()
-    piper.MotionCtrl_1(0x02,0,0)#恢复
-    piper.MotionCtrl_2(0, 0, 0, 0x00)#位置速度模式
+    piper.MotionCtrl_1(0x02,0,0)# восстановить
+    piper.MotionCtrl_2(0, 0, 0, 0x00)# режим позиция-скорость
 ```
 
-## 设置机械臂为mit控制模式
+## Переключение робота-манипулятора в режим управления MIT
 
 ```python
 #!/usr/bin/env python3
 # -*-coding:utf8-*-
-# 注意demo无法直接运行，需要pip安装sdk后才能运行
-# 设置机械臂为mit控制模式，这个模式下，机械臂相应最快
+# Обратите внимание: демо нельзя запустить напрямую, сначала установите sdk через pip
+# Переключить робот-манипулятор в режим управления MIT; в этом режиме он реагирует быстрее всего
 
 from typing import (
     Optional,
@@ -413,7 +414,7 @@ from typing import (
 import time
 from piper_sdk import *
 
-# 测试代码
+# Тестовый код
 if __name__ == "__main__":
     piper = C_PiperInterface()
     piper.ConnectPort()
