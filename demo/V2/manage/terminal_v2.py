@@ -537,7 +537,7 @@ class PiperTerminal:
         details: List[dict] = []    # telemetry with ts (first field is ts)
         _acq_times: List[float] = []  # seconds
         zero_start: Optional[float] = None
-        zero_warned = False
+        zero_warned_at = time.time()
         try:
             while not self._rec_stop.is_set():
                 _acq_start = time.perf_counter()
@@ -556,14 +556,15 @@ class PiperTerminal:
                 if all(v == 0 for v in curr_point):
                     if zero_start is None:
                         zero_start = time.time()
-                    elif time.time() - zero_start > 0.1 and not zero_warned:
-                        logging.error("[REC] Получаем нулевые данные >0.1s – проверьте соединение.")
-                        zero_warned = True
+                    elif time.time() - zero_start > 1:
+                        if time.time() - zero_warned_at > 1:
+                            logging.error("[REC] Получаем нулевые данные >1s – проверьте соединение.")
+                            zero_warned_at = time.time()
                     time.sleep(period)
                     continue
                 else:
                     zero_start = None
-                    zero_warned = False
+                    zero_warned_at = time.time()
 
                 data.append(curr_point)
                 hs = arm.GetArmHighSpdInfoMsgs()
