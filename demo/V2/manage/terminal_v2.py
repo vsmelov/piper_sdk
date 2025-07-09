@@ -62,7 +62,7 @@ DELAY_BETWEEN_TRACKS = 3  # секунд паузы между треками
 # Значение суставов SDK измеряются в «0.001 °» (тысячных долей градуса).
 # Поэтому 1 ° = 1000 единиц SDK.
 # Будем считать «близко», если ошибка ≤ 3 °.
-TOLERANCE_ANGLE_DEG = 5
+TOLERANCE_ANGLE_DEG = 20  # todo нужны отделные толерантности под каждый сустав
 # преобразуем в единицы SDK (int, чтобы не плодить float-ы)
 TOLERANCE_ANGLE_UNITS = TOLERANCE_ANGLE_DEG * 1000  # 3000 units = 3°
 
@@ -276,28 +276,39 @@ class PiperTerminal:
             )
 
         curr = self._current_point(arm)
-        found = False
+        best_delta = math.inf
+        best_track_path: Optional[Path] = None
+        best_pt: Optional[List[int]] = None
+        best_worst_joint: Optional[int] = None
+
         for p in z_tracks:
-            if found:
-                break
             try:
                 data = json.loads(p.read_text())
             except Exception as exc:
                 logging.exception(f'fail: {exc}')
                 continue
-            # Проверяем не каждую точку, чтобы не тратить время
             for pt in data:
-                if self._is_close_ignored(curr, pt):
-                    logging.info(f"[SAFE] Находимся в безопасном треке ({p.name}).")
-                    found = True
-                    break
+                delta, worst_joint = self._max_delta_and_joint_ignored(curr, pt)
+                if delta < best_delta:
+                    best_delta = delta
+                    best_track_path = p
+                    best_pt = pt
+                    best_worst_joint = worst_joint
 
-        if not found:
-            logging.error("[UNSAFE] далеко от safe-track")
-            return PiperResponse(
-                ok=False,
-                error='far from 0 tracks'
+        if best_delta > TOLERANCE_ANGLE_UNITS:
+            logging.error(
+                "[UNSAFE] далеко от safe-track | "
+                f"closest Δ={best_delta} units (~{best_delta/1000:.3f}°), "
+                f"track={best_track_path.name if best_track_path else 'n/a'}, "
+                f"worst joint #{best_worst_joint}"
             )
+            return PiperResponse(ok=False, error='far from 0 tracks')
+
+        # Found safe proximity
+        logging.info(
+            f"[SAFE] Ближайший safe-track: {best_track_path.name if best_track_path else 'n/a'} | "
+            f"Δ={best_delta} units (~{best_delta/1000:.3f}°) | worst joint #{best_worst_joint} | point {best_pt}"
+        )
 
         logging.info("[SAFE] близко к safe-track, СБРОС")
         self.__dangerous_reset(arm)
@@ -800,12 +811,9 @@ class PiperTerminal:
         raise ValueError("Имя должно начинаться с left__")
 
     def _send_point(self, arm, pt):
-        arm.JointCtrl(*pt[:6])
-        # Apply tightening if configured (>0)
-        grip_val = pt[6]
-        if GRIPPER_TIGHT_COEFFICEINT > 0:
-            grip_val = int(grip_val * (1 - GRIPPER_TIGHT_COEFFICEINT))
-        arm.GripperCtrl(grip_val, GRIPPER_EFFORT, 0x01, 0)
+        eff_pt = self._effective_target(pt)
+        arm.JointCtrl(*eff_pt[:6])
+        arm.GripperCtrl(eff_pt[6], GRIPPER_EFFORT, 0x01, 0)
 
         # Notify visualizer if hook set
         if self._point_hook is not None:
@@ -857,26 +865,45 @@ class PiperTerminal:
             first_send_ts = time.time()
             last_send_ts = 0.0
             warned = False
+            last_warn_ts = first_send_ts
 
-            ensure_control_delay = 0.01
+            ensure_control_delay = 0.02
             warning_after = 0.06
             while True:
                 # Send control command every 10 ms
                 now = time.time()
                 if now - last_send_ts >= ensure_control_delay:
                     self._send_point(arm, tp.coordinates)
+                    logging.info(f'[SEND] {tp.coordinates}')
                     last_send_ts = now
 
                 # Check convergence
-                if self._is_close_strict(self._current_point(arm), tp.coordinates, tol=200):
+                target_pos = self._effective_target(tp.coordinates)
+                if self._is_close_strict(
+                        self._current_point(arm),
+                        target_pos,
+                        tol=100,
+                        gripper_tol=800,  # very stupid
+                ):
                     break
 
-                # Warn if exceeded warning_after from first attempt
-                if not warned and now - first_send_ts >= warning_after:
-                    logging.warning(
-                        f"[PLAY] Point {idx}: arm not in position after {warning_after} s – continuing retries"
-                    )
-                    warned = True
+                # Issue warnings
+                if now - first_send_ts >= warning_after:
+                    if (not warned) or (now - last_warn_ts >= 1.0):
+                        curr_pos = self._current_point(arm)
+                        target_pos = self._effective_target(tp.coordinates)
+                        deltas = [abs(a - b) for a, b in zip(curr_pos, target_pos)]
+                        max_delta = max(deltas)
+                        worst_joint = deltas.index(max_delta)
+
+                        logging.warning(
+                            f"[PLAY] Point {idx}: arm not in position Δmax={max_delta} units (~{max_delta/1000:.3f}°) worst joint #{worst_joint}"
+                        )
+                        logging.warning(f"  current={curr_pos}")
+                        logging.warning(f"  target={target_pos}")
+                        logging.warning(f"  deltas={deltas}")
+                        warned = True
+                        last_warn_ts = now
 
                 if self._play_stop.is_set():
                     break
@@ -894,22 +921,56 @@ class PiperTerminal:
 
     # --------------------------------- geometry helpers ------------------------------------------------
     def _current_point(self, arm):
-        js = arm.GetArmJointMsgs().joint_state
-        gr = arm.GetArmGripperMsgs().gripper_state
-        return [
-            js.joint_1,
-            js.joint_2,
-            js.joint_3,
-            js.joint_4,
-            js.joint_5,
-            js.joint_6,
-            gr.grippers_angle,
-        ]
+        """Return current joint/gripper angles.
+
+        Sometimes immediately after reconnect the device can report all-zero
+        values for a short period. We poll for up to 100 ms waiting for any
+        non-zero reading. If the timeout is reached – a warning is emitted and
+        the last (still zero) reading is returned so that callers can decide
+        what to do next.
+        """
+        deadline = time.perf_counter() + 0.1  # 100 ms
+        warned_at = time.time()
+        while True:
+            js = arm.GetArmJointMsgs().joint_state
+            gr = arm.GetArmGripperMsgs().gripper_state
+            pt = [
+                js.joint_1,
+                js.joint_2,
+                js.joint_3,
+                js.joint_4,
+                js.joint_5,
+                js.joint_6,
+                gr.grippers_angle,
+            ]
+
+            if any(v != 0 for v in pt):
+                return pt
+
+            if time.perf_counter() >= deadline:
+                if time.time() - warned_at > 0.1:
+                    logging.warning("[DATA] No valid joint data for >100 ms (all zeros)")
+                    warned_at = time.time()
+
+            time.sleep(0.005)  # small back-off to avoid busy-loop
 
     @staticmethod
-    def _is_close_strict(pt_a, pt_b, tol=TOLERANCE_ANGLE_UNITS):
+    def _is_close_strict(
+            pt_a,
+            pt_b,
+            tol=TOLERANCE_ANGLE_UNITS,
+            gripper_tol=None
+    ):
         """Сравнение без исключений суставов (строгий режим)."""
-        return all(abs(a - b) <= tol for a, b in zip(pt_a, pt_b))
+        motors_a = pt_a[:-1]
+        gripper_a = pt_a[-1]
+        motors_b = pt_b[:-1]
+        gripper_b = pt_b[-1]
+        motors_flag = all(abs(a - b) <= tol for a, b in zip(motors_a, motors_b))
+        if gripper_tol is None:
+            gripper_tol = tol
+        gripper_flag = abs(gripper_a - gripper_b) <= gripper_tol
+        return motors_flag and gripper_flag
 
     @staticmethod
     def _is_close_ignored(pt_a, pt_b, tol=TOLERANCE_ANGLE_UNITS):
@@ -998,7 +1059,7 @@ class PiperTerminal:
                 else:
                     logging.info("Неизвестная команда.")
             except TypeError as e:
-                logging.info(f"[ARGS] {e}")
+                logging.exception(f"[ARGS] {e}")
             except Exception:  # noqa: BLE001
                 logging.exception("[EXCEPTION] Unhandled error")
         # корректно закрываем (только CAN0)
@@ -1020,6 +1081,14 @@ class PiperTerminal:
         Pass None to remove the hook.
         """
         self._point_hook = func
+
+    @staticmethod
+    def _effective_target(pt: List[int]) -> List[int]:
+        """Return a copy of pt with tightening applied to gripper (index 6)."""
+        eff = list(pt)
+        if GRIPPER_TIGHT_COEFFICEINT > 0:
+            eff[6] = int(eff[6] * (1 - GRIPPER_TIGHT_COEFFICEINT))
+        return eff
 
 
 # -------------------------------------------------------------------- MAIN

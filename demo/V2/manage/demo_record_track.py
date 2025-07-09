@@ -32,8 +32,13 @@ import termios
 import tty
 
 
+start_at = time.time()
+
 def _stop_pressed() -> bool:  # noqa: D401 – одностр.
     """Вернёт True, если пользователь нажал пробел (space) без клавиши Enter."""
+
+    if time.time() - start_at > 20:
+        return True
 
     # Если скрипт запущен не из интерактивного терминала (например, IDE/cron),
     # stdin не является TTY – тогда просто игнорируем остановку по пробелу.
@@ -83,7 +88,7 @@ def record(json_path: Path, hz: int, can_name: str) -> None:
             ls = arm.GetArmLowSpdInfoMsgs()
 
             # -- краткая запись (только суставы + схват) ------------------
-            data.append([
+            p = [
                 js.joint_1,
                 js.joint_2,
                 js.joint_3,
@@ -91,8 +96,9 @@ def record(json_path: Path, hz: int, can_name: str) -> None:
                 js.joint_5,
                 js.joint_6,
                 gr.grippers_angle,
-            ])
-            print(data)
+            ]
+            data.append(p)
+            print(p)
 
             # -- расширённая запись --------------------------------------
             sample = {
