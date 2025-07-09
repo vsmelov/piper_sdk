@@ -839,6 +839,36 @@ class PiperTerminal:
             logging.exception(f"[WARN] Failed to load details for {full_name}")
             return []
 
+    # ---------------------------- Public API (GUI helpers) ----------------------------
+    def list_tracks(self) -> List[str]:
+        """Return a sorted list of available track names (without extension)."""
+        return sorted(
+            p.stem for p in TRACK_DIR.glob("*.json") if not p.name.endswith(".details.json")
+        )
+
+    def start_record(self, full_name: str):
+        """Begin recording a new track with *full_name* (e.g. 'left__my_move')."""
+        self.cmd_record(full_name)
+
+    def stop_record(self):
+        """Stop the current recording session (if any)."""
+        self.cmd_s()
+
+    def play_tracks(self, *tracks: str):
+        """Play one or more tracks sequentially (blocking call)."""
+        self.cmd_play(*tracks)
+
+    def is_recording(self) -> bool:
+        """Return True if a recording thread is currently active."""
+        return self._rec_thread is not None and self._rec_thread.is_alive()
+
+    def shutdown(self):
+        """Cleanup resources (disconnect CAN) – call when GUI exits."""
+        try:
+            self.left_arm.DisconnectPort()
+        except Exception:
+            pass
+
     # --------------------------------- цикл ввода ------------------------------------------------------
     def repl(self):
         logging.info(
