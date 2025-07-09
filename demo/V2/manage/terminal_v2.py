@@ -53,7 +53,7 @@ GRIPPER_EFFORT = 4000
 
 # DANGEROUS constant: how much the gripper will additionally squeeze during playback.
 # Value is a fraction; resulting gripper angle is reduced by this coefficient (tightening).
-GRIPPER_TIGHT_COEFFICEINT = 0.05  # ⚠️ changing this may break grasp reliability
+GRIPPER_TIGHT_COEFFICEINT = 0.02  # ⚠️ changing this may break grasp reliability
 
 # ---------- Настройки ----------
 DELAY_BETWEEN_TRACKS = 3  # секунд паузы между треками
