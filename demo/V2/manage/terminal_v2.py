@@ -36,6 +36,12 @@ from demo.V2.settings import CAN_LEFT, CAN_RIGHT
 import logging
 from demo.V2.manage.track import TrackBase, TrackV2, TrackPoint
 
+
+# ------------------------------------------------------------------------------------
+# Если одна из рук недоступна – будем хранить в атрибуте *None* (без лишних классов).
+# ------------------------------------------------------------------------------------
+
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -131,19 +137,36 @@ class PiperTerminal:
     """
 
     def __init__(self) -> None:
-        # Инициализируем обе руки: левая – CAN_LEFT, правая – CAN_RIGHT
-        self.left_arm = SDK.get_instance(CAN_LEFT)
-        self.right_arm = SDK.get_instance(CAN_RIGHT)
+        # Инициализируем каждую руку отдельно и не падаем, если одна из них недоступна.
 
-        for arm, label in (
-            (self.left_arm, f"LEFT ({CAN_LEFT})"),
-            (self.right_arm, f"RIGHT ({CAN_RIGHT})"),
-        ):
+        # Левая рука ------------------------------------------------------------------
+        try:
+            _left_candidate = SDK.get_instance(CAN_LEFT)
             try:
-                arm.ConnectPort()
-                logging.info(f"{label} port connected.")
-            except Exception as e:  # noqa: BLE001
-                logging.info(f"[WARN] Не удалось открыть {label}: {e}")
+                _left_candidate.ConnectPort()
+                self.left_arm = _left_candidate
+                logging.info(f"LEFT ({CAN_LEFT}) port connected.")
+            except Exception as exc:
+                logging.warning(f"LEFT ({CAN_LEFT}) connection failed: {exc}")
+                self.left_arm = None
+        except Exception as exc:
+            logging.warning(f"LEFT ({CAN_LEFT}) initialisation failed: {exc}")
+            self.left_arm = None
+
+        # Правая рука ----------------------------------------------------------------
+        try:
+            _right_candidate = SDK.get_instance(CAN_RIGHT)
+            try:
+                _right_candidate.ConnectPort()
+                self.right_arm = _right_candidate
+                logging.info(f"RIGHT ({CAN_RIGHT}) port connected.")
+            except Exception as exc:
+                logging.warning(f"RIGHT ({CAN_RIGHT}) connection failed: {exc}")
+                self.right_arm = None
+        except Exception as exc:
+            logging.warning(f"RIGHT ({CAN_RIGHT}) initialisation failed: {exc}")
+            self.right_arm = None
+
         # Запись
         self._rec_thread: Optional[threading.Thread] = None
         self._rec_stop = threading.Event()
@@ -318,9 +341,11 @@ class PiperTerminal:
         self.__dangerous_reset(arm, can_name)
         # эту штуку важно вызвать два раза иначе рука не напряжется (мне пока лень разбираться почему)
 
-        logging.info("[SAFE] едем в 0-pos")
-        zero_pos = json.loads(ZERO_POS_PATH.read_text())
-        self._move_smooth(arm, zero_pos)
+        # todo это не надо!
+        # logging.info("[SAFE] едем в 0-pos")
+        # zero_pos = json.loads(ZERO_POS_PATH.read_text())
+        # self._move_smooth(arm, zero_pos)
+
         # if not self.cmd_check_0_pos():
         #     logging.error(f'[ERROR] мы не приехали в 0 pos')
         #     return PiperResponse(
@@ -886,8 +911,12 @@ class PiperTerminal:
 
     def _arm_from_name(self, full_name: str):
         if full_name.startswith("left__"):
+            if self.left_arm is None:
+                raise RuntimeError("Left arm is not initialised/connected.")
             return self.left_arm
         if full_name.startswith("right__"):
+            if self.right_arm is None:
+                raise RuntimeError("Right arm is not initialised/connected.")
             return self.right_arm
         raise ValueError("Имя должно начинаться с left__ или right__")
 
@@ -910,7 +939,7 @@ class PiperTerminal:
         arm.ModeCtrl(ctrl_mode=0x01, move_mode=0x01, move_spd_rate_ctrl=50)
         time.sleep(0.02)
 
-    def _run_track(self, arm, data: List[TrackPoint], hz: int = 50):
+    def _run_track(self, arm, data: List[TrackPoint], details=None, hz: int = 50):
         """Play the given trajectory with accuracy gating.
 
         The next point will not be issued until the arm is within 0.2° (≈200 units)
@@ -946,46 +975,46 @@ class PiperTerminal:
 
             self._send_point(arm, tp.coordinates)
 
-            # -------------------- accuracy gating --------------------
-            first_send_ts = time.time()
-            warned = False
-            last_warn_ts = first_send_ts
-
-            warning_after = 0.06
-            while True:
-                now = time.time()
-
-                # Check convergence
-                target_pos = self._effective_target(tp.coordinates)
-                if self._is_close_strict(
-                        self._current_point(arm),
-                        target_pos,
-                        tol=100,
-                        gripper_tol=800,  # very stupid
-                ):
-                    break
-
-                # Issue warnings
-                if now - first_send_ts >= warning_after:
-                    if (not warned) or (now - last_warn_ts >= 1.0):
-                        curr_pos = self._current_point(arm)
-                        target_pos = self._effective_target(tp.coordinates)
-                        deltas = [abs(a - b) for a, b in zip(curr_pos, target_pos)]
-                        max_delta = max(deltas)
-                        worst_joint = deltas.index(max_delta)
-
-                        logging.warning(
-                            f"[PLAY] Point {idx}: arm not in position Δmax={max_delta} units (~{max_delta/1000:.3f}°) worst joint #{worst_joint}"
-                        )
-                        logging.warning(f"  current={curr_pos}")
-                        logging.warning(f"  target={target_pos}")
-                        logging.warning(f"  deltas={deltas}")
-                        warned = True
-                        last_warn_ts = now
-
-                if self._play_stop.is_set():
-                    break
-                time.sleep(0.002)  # small sleep to avoid busy-loop
+            # # -------------------- accuracy gating --------------------
+            # first_send_ts = time.time()
+            # warned = False
+            # last_warn_ts = first_send_ts
+            #
+            # warning_after = 0.06
+            # while True:
+            #     now = time.time()
+            #
+            #     # Check convergence
+            #     target_pos = self._effective_target(tp.coordinates)
+            #     if self._is_close_strict(
+            #             self._current_point(arm),
+            #             target_pos,
+            #             tol=100,
+            #             gripper_tol=1000,  # very stupid
+            #     ):
+            #         break
+            #
+            #     # Issue warnings
+            #     if now - first_send_ts >= warning_after:
+            #         if (not warned) or (now - last_warn_ts >= 1.0):
+            #             curr_pos = self._current_point(arm)
+            #             target_pos = self._effective_target(tp.coordinates)
+            #             deltas = [abs(a - b) for a, b in zip(curr_pos, target_pos)]
+            #             max_delta = max(deltas)
+            #             worst_joint = deltas.index(max_delta)
+            #
+            #             logging.warning(
+            #                 f"[PLAY] Point {idx}: arm not in position Δmax={max_delta} units (~{max_delta/1000:.3f}°) worst joint #{worst_joint}"
+            #             )
+            #             logging.warning(f"  current={curr_pos}")
+            #             logging.warning(f"  target={target_pos}")
+            #             logging.warning(f"  deltas={deltas}")
+            #             warned = True
+            #             last_warn_ts = now
+            #
+            #     if self._play_stop.is_set():
+            #         break
+            #     time.sleep(0.002)  # small sleep to avoid busy-loop
 
             # # выводим погрешность между целевой точкой и фактической позой
             # if idx % step_log == 0:  # примерно 1% шаг
@@ -1066,6 +1095,18 @@ class PiperTerminal:
         """Load trajectory as list of TrackPoint objects."""
         return TrackBase.read_track(full_name).track_points
 
+    # --- New helper: load *.details.json for a track (may be absent) --------------
+    @staticmethod
+    def _load_details(full_name: str):
+        """Return associated *.details.json contents or empty list if missing."""
+        path = _details_path(full_name)
+        if path.exists():
+            try:
+                return json.loads(path.read_text())
+            except Exception as exc:  # noqa: BLE001
+                logging.warning(f"Failed to load details for '{full_name}': {exc}")
+        return []
+
     # ---------------------------- Public API (GUI helpers) ----------------------------
     def list_tracks(self) -> List[str]:
         """Return a sorted list of available track names (without extension)."""
@@ -1112,10 +1153,14 @@ class PiperTerminal:
 
     def shutdown(self):
         """Cleanup resources (disconnect CAN) – call when GUI exits."""
-        try:
-            self.left_arm.DisconnectPort()
-        except Exception:
-            pass
+        for arm in (self.left_arm, self.right_arm):
+            if arm is None:
+                continue
+            try:
+                arm.DisconnectPort()
+            except Exception:
+                # Ignore disconnect errors.
+                pass
 
     # --------------------------------- цикл ввода ------------------------------------------------------
     def repl(self):
@@ -1147,8 +1192,12 @@ class PiperTerminal:
                 logging.exception(f"[ARGS] {e}")
             except Exception:  # noqa: BLE001
                 logging.exception("[EXCEPTION] Unhandled error")
-        # корректно закрываем (только CAN0)
-        self.left_arm.DisconnectPort()
+        # корректно закрываем левую руку, если она была инициализирована
+        try:
+            if self.left_arm is not None:
+                self.left_arm.DisconnectPort()
+        except Exception:
+            pass
 
     # Алиасы коротких команд --------------------------------------------------
     def cmd_r(self, *args: str):
