@@ -721,9 +721,10 @@ class PiperTerminal:
 
         for i, full_name in enumerate(tracks):
             data = self._load(full_name)
+            details = self._load_details(full_name)
             arm = self._arm_from_name(full_name)
             logging.info(f"[PLAY] {full_name} ({len(data)} pts)…")
-            self._run_track(arm, data)
+            self._run_track(arm, data, details)
             if i < len(tracks) - 1:
                 logging.info(f"…пауза {DELAY_BETWEEN_TRACKS} c…")
                 time.sleep(DELAY_BETWEEN_TRACKS)
@@ -751,22 +752,43 @@ class PiperTerminal:
         arm.ModeCtrl(ctrl_mode=0x01, move_mode=0x01, move_spd_rate_ctrl=50)
         time.sleep(0.02)
 
-    def _run_track(self, arm, data: List[List[int]], hz: int = 50):
+    def _run_track(self, arm, data: List[List[int]], details: Optional[List[dict]] = None, hz: int = 50):
+        """Play the given trajectory.
+
+        If timestamps are provided in *details*, the playback speed will match the
+        original recording. Otherwise falls back to a fixed *hz* rate.
+        """
+        use_timestamps = bool(details)
+        if use_timestamps and len(details) != len(data):
+            logging.warning("[PLAY] details length mismatch – falling back to fixed hz mode")
+            use_timestamps = False
+
         period = 1.0 / hz
         logging.info("ModeCtrl: ctrl_mode=0x01, move_mode=0x01   (start track)")
         self._prepare_track_play(arm)
         total_pts = len(data)
         last_pct = -10
-        step = max(1, len(data) // 1000)
+        # Мы больше не пропускаем точки, чтобы обеспечить корректный тайминг
+        started_at = time.time() if use_timestamps else None
+        first_ts = details[0]['ts'] if use_timestamps else None
+
         for idx, pt in enumerate(data):
-            if idx % step != 0 and idx != len(data) - 1:
-                continue
-            self._send_point(arm, pt)
-            time.sleep(period)
+            if use_timestamps:
+                target_offset = details[idx]['ts'] - first_ts
+                run_time = time.time() - started_at
+                delay = max(0.0, target_offset - run_time)
+                if delay > 0:
+                    time.sleep(delay)
+                self._send_point(arm, pt)
+            else:
+                self._send_point(arm, pt)
+                time.sleep(period)
+
             pct = int((idx + 1) * 100 / total_pts)
             if pct // 10 > last_pct // 10:
                 last_pct = pct
                 logging.info(f"[PLAY] progress {pct}% ({idx+1}/{total_pts})")
+
         arm.ModeCtrl(ctrl_mode=0x00, move_mode=0x00)
         logging.info("ModeCtrl: ctrl_mode=0x00, move_mode=0x00   (end track)")
 
@@ -800,6 +822,22 @@ class PiperTerminal:
         if not path.exists():
             raise FileNotFoundError(path)
         return json.loads(path.read_text())
+
+    @staticmethod
+    def _load_details(full_name: str) -> List[dict]:
+        """Load per-point metadata (including timestamps) for a track.
+
+        Returns an empty list if the *.details.json file is missing.
+        """
+        try:
+            path = _details_path(full_name)
+            if not path.exists():
+                return []
+            return json.loads(path.read_text())
+        except Exception:
+            # Any problem reading – degrade gracefully to empty list
+            logging.exception(f"[WARN] Failed to load details for {full_name}")
+            return []
 
     # --------------------------------- цикл ввода ------------------------------------------------------
     def repl(self):
