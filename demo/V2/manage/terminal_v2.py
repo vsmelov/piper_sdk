@@ -206,7 +206,7 @@ class PiperTerminal:
         arm.ModeCtrl(0x01, 0x01, 50, 0x00)  # включаем контроль руки
         time.sleep(1)  # wait
 
-        arm.SetSDKJointLimitParam('j6', -2.09439 - 0.1, 2.09439 + 0.1)
+        # arm.SetSDKJointLimitParam('j6', -2.09439 - 0.1, 2.09439 + 0.1)  # отключаем крайние лимиты
 
     # --------------------------------- util helpers ----------------------------------------------------
     def _confirm_overwrite(self, path: Path) -> bool:
@@ -758,6 +758,8 @@ class PiperTerminal:
         If timestamps are provided in *details*, the playback speed will match the
         original recording. Otherwise falls back to a fixed *hz* rate.
         """
+        if details is None:
+            details = []
         use_timestamps = bool(details)
         if use_timestamps and len(details) != len(data):
             logging.warning("[PLAY] details length mismatch – falling back to fixed hz mode")
@@ -768,9 +770,10 @@ class PiperTerminal:
         self._prepare_track_play(arm)
         total_pts = len(data)
         last_pct = -10
+        step_log = max(1, total_pts // 100)
         # Мы больше не пропускаем точки, чтобы обеспечить корректный тайминг
-        started_at = time.time() if use_timestamps else None
-        first_ts = details[0]['ts'] if use_timestamps else None
+        started_at: float = time.time() if use_timestamps else 0.0
+        first_ts: float = details[0]['ts'] if use_timestamps else 0.0
 
         for idx, pt in enumerate(data):
             if use_timestamps:
@@ -783,6 +786,12 @@ class PiperTerminal:
             else:
                 self._send_point(arm, pt)
                 time.sleep(period)
+
+            # выводим погрешность между целевой точкой и фактической позой
+            if idx % step_log == 0:  # примерно 1% шаг
+                feedback = self._current_point(arm)
+                delta = [abs(a - b) for a, b in zip(feedback, pt)]
+                logging.info(f"[DELTA] {delta}")
 
             pct = int((idx + 1) * 100 / total_pts)
             if pct // 10 > last_pct // 10:
