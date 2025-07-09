@@ -944,21 +944,16 @@ class PiperTerminal:
                         break
                     time.sleep(0.001)
 
+            self._send_point(arm, tp.coordinates)
+
             # -------------------- accuracy gating --------------------
             first_send_ts = time.time()
-            last_send_ts = 0.0
             warned = False
             last_warn_ts = first_send_ts
 
-            ensure_control_delay = 0.02
             warning_after = 0.06
             while True:
-                # Send control command every 10 ms
                 now = time.time()
-                if now - last_send_ts >= ensure_control_delay:
-                    self._send_point(arm, tp.coordinates)
-                    logging.info(f'[SEND] {tp.coordinates}')
-                    last_send_ts = now
 
                 # Check convergence
                 target_pos = self._effective_target(tp.coordinates)
@@ -992,11 +987,11 @@ class PiperTerminal:
                     break
                 time.sleep(0.002)  # small sleep to avoid busy-loop
 
-            # выводим погрешность между целевой точкой и фактической позой
-            if idx % step_log == 0:  # примерно 1% шаг
-                feedback = self._current_point(arm)
-                delta = [abs(a - b) for a, b in zip(feedback, pt)]
-                logging.info(f"[DELTA] {delta}")
+            # # выводим погрешность между целевой точкой и фактической позой
+            # if idx % step_log == 0:  # примерно 1% шаг
+            #     feedback = self._current_point(arm)
+            #     delta = [abs(a - b) for a, b in zip(feedback, pt)]
+            #     logging.info(f"[DELTA] {delta}")
 
             pct = int((idx + 1) * 100 / total_pts)
             if pct // 10 > last_pct // 10:
