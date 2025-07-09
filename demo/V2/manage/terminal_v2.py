@@ -4,7 +4,7 @@ import json
 import threading
 import time
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Callable
 import math
 from dataclasses import dataclass
 
@@ -61,7 +61,7 @@ DELAY_BETWEEN_TRACKS = 3  # секунд паузы между треками
 # Значение суставов SDK измеряются в «0.001 °» (тысячных долей градуса).
 # Поэтому 1 ° = 1000 единиц SDK.
 # Будем считать «близко», если ошибка ≤ 3 °.
-TOLERANCE_ANGLE_DEG = 3
+TOLERANCE_ANGLE_DEG = 5
 # преобразуем в единицы SDK (int, чтобы не плодить float-ы)
 TOLERANCE_ANGLE_UNITS = TOLERANCE_ANGLE_DEG * 1000  # 3000 units = 3°
 
@@ -82,16 +82,26 @@ def _details_path(full_name: str) -> Path:
 
 
 def _zero_track_path(name: str) -> Path:
-    """Файл безопасного (zero) трека внутри SAFE_DIR."""
+    """
+    Файл безопасного (zero) трека внутри SAFE_DIR.
+    Имя файла содержит два подчеркивания.
+    """
     return SAFE_DIR / f"zero_track__{name}.json"
 
 
 def _zero_track_details_path(name: str) -> Path:
+    """
+    Файл деталей безопасного (zero) трека внутри SAFE_DIR.
+    Имя файла содержит два подчеркивания.
+    """
     return SAFE_DIR / f"zero_track__{name}.details.json"
 
 
 def _list_zero_tracks() -> List[Path]:
-    """Возвращает только основные файлы треков (без *.details.json)."""
+    """
+    Возвращает только основные файлы треков (без *.details.json).
+    Имя файла содержит два подчеркивания.
+    """
     return sorted(
         p for p in SAFE_DIR.glob("zero_track__*.json") if not p.name.endswith(".details.json")
     )
@@ -132,6 +142,14 @@ class PiperTerminal:
         # Запись
         self._rec_thread: Optional[threading.Thread] = None
         self._rec_stop = threading.Event()
+        # Воспроизведение
+        self._play_thread: Optional[threading.Thread] = None
+        self._play_stop = threading.Event()
+        self._play_stop.set()  # not playing initially
+
+        # Optional callback invoked for each point sent during playback.
+        # Signature: hook(pt: List[int]) where pt is 7-length list (deg001 units)
+        self._point_hook = None  # type: Optional[Callable[[List[int]], None]]
 
     def __dangerous_reset(self, arm):
         # это код полное говно, но работает
@@ -695,9 +713,14 @@ class PiperTerminal:
 
     # --------------------------------- play -------------------------------------------------------------
     def cmd_play(self, *tracks: str):
+        # --- Setup stop flags & thread info ---
         if not tracks:
             logging.info("play: требуется >=1 трек")
             return
+        self._play_stop.clear()
+        # Remember the thread that executes playback so we can join later
+        self._play_thread = threading.current_thread()
+
         # for prev, curr in zip(tracks, tracks[1:]):
         #     if not curr.startswith(prev + "__"):
         #         logging.info(f"Ошибка порядка: '{curr}' не является потомком '{prev}'.")
@@ -720,15 +743,34 @@ class PiperTerminal:
             time.sleep(0.2)
 
         for i, full_name in enumerate(tracks):
+            if self._play_stop.is_set():
+                logging.info("[PLAY] Стоп запрошен – прерываем воспроизведение после трека.")
+                break
+
             data = self._load(full_name)
             details = self._load_details(full_name)
             arm = self._arm_from_name(full_name)
             logging.info(f"[PLAY] {full_name} ({len(data)} pts)…")
             self._run_track(arm, data, details)
+
+            if self._play_stop.is_set():
+                logging.info("[PLAY] Стоп запрошен – останавливаем дальнейшие треки.")
+                break
+
             if i < len(tracks) - 1:
                 logging.info(f"…пауза {DELAY_BETWEEN_TRACKS} c…")
-                time.sleep(DELAY_BETWEEN_TRACKS)
+                # Если во время паузы поступил запрос на остановку – уходим сразу
+                for _ in range(DELAY_BETWEEN_TRACKS * 10):
+                    if self._play_stop.is_set():
+                        break
+                    time.sleep(0.1)
+                if self._play_stop.is_set():
+                    logging.info("[PLAY] Стоп запрошен во время паузы – прерываем.")
+                    break
+
         logging.info("✓ Воспроизведение завершено.")
+        self._play_thread = None
+        self._play_stop.set()
 
     # --------------------------------- low-level helpers -----------------------------------------------
     def _arm_from_name(self, full_name: str):
@@ -745,6 +787,14 @@ class PiperTerminal:
         if GRIPPER_TIGHT_COEFFICEINT > 0:
             grip_val = int(grip_val * (1 - GRIPPER_TIGHT_COEFFICEINT))
         arm.GripperCtrl(grip_val, GRIPPER_EFFORT, 0x01, 0)
+
+        # Notify visualizer if hook set
+        if self._point_hook is not None:
+            try:
+                self._point_hook(pt)
+            except Exception:
+                # Do not let GUI errors break control loop
+                logging.debug("point_hook raised", exc_info=True)
 
     def _prepare_track_play(self, arm):
         """Один раз перед отправкой траектории настраиваем режим."""
@@ -773,6 +823,10 @@ class PiperTerminal:
         first_ts = details[0]['ts'] if use_timestamps else None
 
         for idx, pt in enumerate(data):
+            if self._play_stop.is_set():
+                logging.info("[PLAY] Стоп запрошен – прерываем трек.")
+                break
+
             if use_timestamps:
                 target_offset = details[idx]['ts'] - first_ts
                 run_time = time.time() - started_at
@@ -790,6 +844,8 @@ class PiperTerminal:
                 logging.info(f"[PLAY] progress {pct}% ({idx+1}/{total_pts})")
 
         arm.ModeCtrl(ctrl_mode=0x00, move_mode=0x00)
+        if self._play_stop.is_set():
+            logging.info("[PLAY] Трек остановлен досрочно.")
         logging.info("ModeCtrl: ctrl_mode=0x00, move_mode=0x00   (end track)")
 
     # --------------------------------- geometry helpers ------------------------------------------------
@@ -855,12 +911,33 @@ class PiperTerminal:
         self.cmd_s()
 
     def play_tracks(self, *tracks: str):
-        """Play one or more tracks sequentially (blocking call)."""
-        self.cmd_play(*tracks)
+        """Play one or more tracks sequentially (blocking call).
+
+        Stores the playing thread reference so that `stop_play()` can join it from outside.
+        """
+        try:
+            self.cmd_play(*tracks)
+        finally:
+            # Ensure flags reset even on exception
+            self._play_thread = None
+            self._play_stop.set()
 
     def is_recording(self) -> bool:
         """Return True if a recording thread is currently active."""
         return self._rec_thread is not None and self._rec_thread.is_alive()
+
+    def is_playing(self) -> bool:
+        """Return True if a playing thread is currently active."""
+        return self._play_thread is not None and self._play_thread.is_alive()
+
+    def stop_play(self):
+        """Stop the current playing session (if any)."""
+        self._play_stop.set()
+        # Join from a different thread only
+        if self._play_thread and self._play_thread is not threading.current_thread():
+            self._play_thread.join()
+        self._play_thread = None
+        logging.info("✓ Воспроизведение остановлено.")
 
     def shutdown(self):
         """Cleanup resources (disconnect CAN) – call when GUI exits."""
@@ -909,6 +986,14 @@ class PiperTerminal:
     def cmd_p(self, *args: str):
         """Alias for play."""
         self.cmd_play(*args)
+
+    # ---------------------------- hook helpers ----------------------------
+    def set_point_hook(self, func):
+        """Register a callback called on every _send_point during playback.
+
+        Pass None to remove the hook.
+        """
+        self._point_hook = func
 
 
 # -------------------------------------------------------------------- MAIN
