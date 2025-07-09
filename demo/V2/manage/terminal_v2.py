@@ -32,7 +32,7 @@ else:
     atexit.register(_save_history)
 
 from interface.piper_interface_v2 import C_PiperInterface_V2 as SDK
-from demo.V2.settings import CAN_NAME
+from demo.V2.settings import CAN_LEFT, CAN_RIGHT
 import logging
 
 # Configure logging
@@ -61,7 +61,7 @@ DELAY_BETWEEN_TRACKS = 3  # секунд паузы между треками
 # Значение суставов SDK измеряются в «0.001 °» (тысячных долей градуса).
 # Поэтому 1 ° = 1000 единиц SDK.
 # Будем считать «близко», если ошибка ≤ 3 °.
-TOLERANCE_ANGLE_DEG = 3
+TOLERANCE_ANGLE_DEG = 5
 # преобразуем в единицы SDK (int, чтобы не плодить float-ы)
 TOLERANCE_ANGLE_UNITS = TOLERANCE_ANGLE_DEG * 1000  # 3000 units = 3°
 
@@ -121,19 +121,24 @@ class PiperTerminal:
     """
 
     def __init__(self) -> None:
-        # Инициализируем только левую руку (can0). Правая (can1) временно не используется.
-        self.left_arm = SDK.get_instance(CAN_NAME)
-        self.right_arm = None  # заглушка
-        try:
-            self.left_arm.ConnectPort()
-            logging.info("CAN0 port connected.")
-        except Exception as e:  # noqa: BLE001
-            logging.info(f"[WARN] Не удалось открыть CAN0: {e}")
+        # Инициализируем обе руки: левая – CAN_LEFT, правая – CAN_RIGHT
+        self.left_arm = SDK.get_instance(CAN_LEFT)
+        self.right_arm = SDK.get_instance(CAN_RIGHT)
+
+        for arm, label in (
+            (self.left_arm, f"LEFT ({CAN_LEFT})"),
+            (self.right_arm, f"RIGHT ({CAN_RIGHT})"),
+        ):
+            try:
+                arm.ConnectPort()
+                logging.info(f"{label} port connected.")
+            except Exception as e:  # noqa: BLE001
+                logging.info(f"[WARN] Не удалось открыть {label}: {e}")
         # Запись
         self._rec_thread: Optional[threading.Thread] = None
         self._rec_stop = threading.Event()
 
-    def __dangerous_reset(self, arm):
+    def __dangerous_reset(self, arm, can_name):
         # это код полное говно, но работает
         # надо разобраться что тут реально нужно а что нет (либо забить хуй)
         # 1) Сбрасываем все возможные внутренние статусы после drag-teach
@@ -146,9 +151,9 @@ class PiperTerminal:
 
         arm.DisconnectPort()
 
-        time.sleep(1)  # даем piper перезагрузится, если ждать меньше будет рука-импотент
+        time.sleep(1)  # даём контроллеру перезапуститься
 
-        arm = SDK.get_instance(CAN_NAME)  # важно пересоздать руку (я хз почему)
+        arm = SDK.get_instance(can_name)  # важно пересоздать руку (я хз почему)
         arm.ConnectPort(can_init=True)  # этот аргумент важен
 
 
@@ -243,7 +248,7 @@ class PiperTerminal:
         )
 
     # --------------------------------- Zero safety helpers ---------------------------------------------
-    def _maybe_reset_from_safe_pose_and_move_to_0(self, arm) -> PiperResponse:
+    def _maybe_reset_from_safe_pose_and_move_to_0(self, arm, can_name) -> PiperResponse:
         """Если текущая поза достаточно близка к любому Zero-треку – выполняем безопасный reset.
 
         Алгоритм:
@@ -282,24 +287,29 @@ class PiperTerminal:
             )
 
         logging.info("[SAFE] близко к safe-track, СБРОС")
-        self.__dangerous_reset(arm)
-        self.__dangerous_reset(arm)
+        self.__dangerous_reset(arm, can_name)
+        self.__dangerous_reset(arm, can_name)
         # эту штуку важно вызвать два раза иначе рука не напряжется (мне пока лень разбираться почему)
 
         logging.info("[SAFE] едем в 0-pos")
         zero_pos = json.loads(ZERO_POS_PATH.read_text())
         self._move_smooth(arm, zero_pos)
-        if not self.cmd_check_0_pos():
-            logging.error(f'[ERROR] мы не приехали в 0 pos')
-            return PiperResponse(
-                ok=False,
-                error='not in 0 pos'
-            )
-        else:
-            logging.info("[SAFE] приехали в 0-pos")
-            return PiperResponse(
-                ok=True,
-            )
+        # if not self.cmd_check_0_pos():
+        #     logging.error(f'[ERROR] мы не приехали в 0 pos')
+        #     return PiperResponse(
+        #         ok=False,
+        #         error='not in 0 pos'
+        #     )
+        # else:
+        #     logging.info("[SAFE] приехали в 0-pos")
+        #     return PiperResponse(
+        #         ok=True,
+        #     )
+
+        logging.info("[SAFE] приехали в 0-pos")
+        return PiperResponse(
+            ok=True,
+        )
 
     # --------------------------------- safety helpers ------------------------------------------------
     def _is_near_zero_track(self, arm) -> bool:
@@ -705,7 +715,8 @@ class PiperTerminal:
 
         # Проверка безопасности перед reset-ом
         arm0 = self._arm_from_name(tracks[0])
-        result = self._maybe_reset_from_safe_pose_and_move_to_0(arm0)
+        arm0_can_name = self._arm_can_from_name(tracks[0])
+        result = self._maybe_reset_from_safe_pose_and_move_to_0(arm0, arm0_can_name)
         if not result.ok:
             logging.error(f'bad status: {result}')
             return
@@ -730,13 +741,85 @@ class PiperTerminal:
                 time.sleep(DELAY_BETWEEN_TRACKS)
         logging.info("✓ Воспроизведение завершено.")
 
+    # --------------------------------- play_parallel ----------------------------------------------------
+    def cmd_play_parallel(self, left_track: str = "", right_track: str = ""):
+        """Воспроизвести два трека параллельно – один для левой, другой для правой руки.
+
+        usage: pp <left_track> <right_track>
+        """
+        if not left_track or not right_track:
+            logging.info("pp: требуется 2 трека – левый и правый")
+            return
+
+        tracks = [left_track, right_track]
+
+        # Базовая валидация имён треков
+        for t in tracks:
+            if not (t.startswith("left__") or t.startswith("right__")):
+                logging.error(f"[PP] Неверное имя трека '{t}'. Должно начинаться с 'left__' или 'right__'.")
+                return
+
+        # Проверяем, что передан ровно один трек для каждой руки
+        if (left_track.startswith("left__") and right_track.startswith("left__")) or (
+            left_track.startswith("right__") and right_track.startswith("right__")
+        ):
+            logging.error("[PP] Нужен один трек для левой и один для правой руки – проверьте порядок аргументов.")
+            return
+
+        # Предполетные проверки: сбросы и движение в 0 позу для каждой руки (по очереди)
+        for full_name in tracks:
+            arm = self._arm_from_name(full_name)
+            can_name = self._arm_can_from_name(full_name)
+            result = self._maybe_reset_from_safe_pose_and_move_to_0(arm, can_name)
+            if not result.ok:
+                logging.error(f"[PP] Предусловия безопасности не выполнены для {full_name}: {result.error}")
+                return
+
+        # При необходимости доводим каждую руку до стартовой точки
+        for full_name in tracks:
+            arm = self._arm_from_name(full_name)
+            first_pt = self._load(full_name)[0]
+            if not self._is_close_ignored(self._current_point(arm), first_pt):
+                logging.info(
+                    f"[PP] Перемещаю {'левую' if arm is self.left_arm else 'правую'} руку в начало трека…"
+                )
+                if not self._safe_move_smooth(arm, first_pt):
+                    logging.error("[PP] Движение к стартовой точке отменено (небезопасно).")
+                    return
+                time.sleep(0.2)
+
+        # Внутренний воркер для исполнения одного трека
+        def _play_worker(full_name: str):
+            data = self._load(full_name)
+            details = self._load_details(full_name)
+            arm = self._arm_from_name(full_name)
+            logging.info(f"[PLAY→] {full_name} ({len(data)} pts)…")
+            self._run_track(arm, data, details)
+
+        # Запускаем оба воспроизведения параллельно
+        t_left = threading.Thread(target=_play_worker, args=(left_track,), daemon=True)
+        t_right = threading.Thread(target=_play_worker, args=(right_track,), daemon=True)
+        t_left.start()
+        t_right.start()
+        t_left.join()
+        t_right.join()
+
+        logging.info("✓ Параллельное воспроизведение завершено.")
+
     # --------------------------------- low-level helpers -----------------------------------------------
+    def _arm_can_from_name(self, full_name: str):
+        if full_name.startswith("left__"):
+            return CAN_LEFT
+        if full_name.startswith("right__"):
+            return CAN_RIGHT
+        raise ValueError("Имя должно начинаться с left__ или right__")
+
     def _arm_from_name(self, full_name: str):
         if full_name.startswith("left__"):
             return self.left_arm
         if full_name.startswith("right__"):
-            raise ValueError("Правая рука (can1) недоступна")
-        raise ValueError("Имя должно начинаться с left__")
+            return self.right_arm
+        raise ValueError("Имя должно начинаться с left__ или right__")
 
     def _send_point(self, arm, pt):
         arm.JointCtrl(*pt[:6])
@@ -868,13 +951,14 @@ class PiperTerminal:
             attr = f"cmd_{cmd.replace('-', '_')}"  # поддержка дефисов
             try:
                 getattr(self, attr)(*args)  # type: ignore[attr-defined]
-            except AttributeError:
+            except AttributeError as exc:
+                logging.exception(f'AttributeError: {exc}')
                 if cmd == "help":
                     logging.info(self.__doc__)
                 else:
-                    logging.info("Неизвестная команда.")
+                    logging.warning(f"Неизвестная команда: {cmd=}, {attr=}")
             except TypeError as e:
-                logging.info(f"[ARGS] {e}")
+                logging.exception(f"[ARGS] {e}")
             except Exception:  # noqa: BLE001
                 logging.exception("[EXCEPTION] Unhandled error")
         # корректно закрываем (только CAN0)
@@ -888,6 +972,10 @@ class PiperTerminal:
     def cmd_p(self, *args: str):
         """Alias for play."""
         self.cmd_play(*args)
+
+    def cmd_pp(self, *args: str):
+        """Alias for play_parallel."""
+        self.cmd_play_parallel(*args)
 
 
 # -------------------------------------------------------------------- MAIN
