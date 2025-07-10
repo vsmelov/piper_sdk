@@ -5,8 +5,8 @@
 Алгоритм:
 1. Подключаемся к роботу по CAN (по умолчанию can0).
 2. Включаем все моторы и ждём стабилизации телеметрии.
-3. Логируем текущие углы.
-4. Отправляем JointConfig с `joint_num = 7` и `set_zero = 0xAE` — задаёт положение всех суставов как 0.
+3. Логируем текущие углы.y
+4. Отправляем JointConfig с `joint_num = 7`y и `set_zero = 0xAE` — задаёт положение всех суставов как 0.
 5. Повторно запрашиваем углы, выводим в лог до/после.
 6. Переходим в standby и отключаемся.
 """
@@ -31,6 +31,7 @@ WAIT_DISABLE_TIMEOUT = 5.0  # сек
 
 def _init_logger() -> None:
     fmt = "%(asctime)s [%(levelname)s] %(message)s"
+
     logging.basicConfig(level=logging.INFO,
                         format=fmt,
                         handlers=[
@@ -63,8 +64,8 @@ def set_zero(can_name: str = DEFAULT_CAN):
     arm.ConnectPort(can_init=False)
 
     # Включаем моторы
-    arm.EnableArm(7)
-    time.sleep(0.5)
+    # arm.EnableArm(7)
+
 
     before = _get_current_angles(arm)
     logging.info("Current joint angles (0.001°): %s", before)
@@ -111,12 +112,12 @@ def set_zero(can_name: str = DEFAULT_CAN):
         arm.JointConfig(joint_num=j, set_zero=0xAE, max_joint_acc=0x7FFF)  # type: ignore[arg-type]
         time.sleep(0.1)
 
-    if mode != "s":
+    if mode == "a":
         # --- Все суставы сразу -----------------------------------------
         for joint in range(1, 7):
             _set_joint(joint)
         logging.info("Zero-set command sent to all joints.")
-    else:
+    elif mode == 's':
         # --- Режим по одному суставу -----------------------------------
         while True:
             inp = input("Введите индекс сустава 0-5 (или 'q' для выхода): ").strip().lower()
@@ -127,6 +128,8 @@ def set_zero(can_name: str = DEFAULT_CAN):
                 continue
             _set_joint(int(inp) + 1)  # JointConfig использует диапазон 1-6
         logging.info("Завершён поочерёдный режим установки нулей.")
+    else:
+        raise ValueError('wrong')
 
     # ждём применения
     time.sleep(1.5)
@@ -145,7 +148,7 @@ def set_zero(can_name: str = DEFAULT_CAN):
     logging.info("Driver enable flags after: %s", enables_after)
 
     # Переключаемся в standby и отключаемся
-    arm.ModeCtrl(ctrl_mode=0x00, move_mode=0x00)
+    # arm.ModeCtrl(ctrl_mode=0x00, move_mode=0x00)
     arm.DisconnectPort()
     logging.info("Done.")
 

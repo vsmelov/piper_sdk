@@ -31,15 +31,18 @@ def main():
     arm.ConnectPort(can_init=False)
     time.sleep(0.5)
 
-    js = arm.GetArmJointMsgs().joint_state
-    angles = [js.joint_1, js.joint_2, js.joint_3, js.joint_4, js.joint_5, js.joint_6]
-    logging.info("Current joint angles (0.001°): %s", angles)
+    try:
+        while True:
 
-    # В градусы:
-    deg = [v / 1000.0 for v in angles]
-    logging.info("Current joint angles (deg): %s", deg)
-
-    arm.DisconnectPort()
+            js = arm.GetArmJointMsgs().joint_state
+            angles = [js.joint_1, js.joint_2, js.joint_3, js.joint_4, js.joint_5, js.joint_6]
+            logging.info("Current joint angles (0.001°): %s", angles)
+            deg = [v / 1000.0 for v in angles]
+            logging.info("Current joint angles (deg): %s", deg)
+            logging.info('='*40)
+            time.sleep(1)
+    except KeyboardInterrupt:
+        arm.DisconnectPort()
 
 
 if __name__ == "__main__":

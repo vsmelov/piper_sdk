@@ -27,6 +27,7 @@ DEFAULT_JSON = Path("point.json")
 THRESHOLD = 50  # 100 * 0.001° = 0.1°
 LOG_PERIOD = 0.2  # сек
 
+# ------------------ NEW HELPERS -----------------------------------------
 
 def _init_logger(log_path: Path) -> None:
     fmt = "%(asctime)s [%(levelname)s] %(message)s"
@@ -46,6 +47,46 @@ def _load_point(json_path: Path) -> List[int]:
     return data
 
 
+def _current_pose(arm) -> List[int]:
+    """Return current joint+gripper angles (7 ints)."""
+    js = arm.GetArmJointMsgs().joint_state
+    gr = arm.GetArmGripperMsgs().gripper_state
+    return [
+        js.joint_1,
+        js.joint_2,
+        js.joint_3,
+        js.joint_4,
+        js.joint_5,
+        js.joint_6,
+        gr.grippers_angle,
+    ]
+
+
+def _move_and_wait(arm, target: List[int], label: str = "move", threshold: int = THRESHOLD):
+    """Send JointCtrl/GripperCtrl and wait until *target* reached (blocking)."""
+    arm.JointCtrl(*target[:6])
+    if len(target) == 7:
+        arm.GripperCtrl(target[6], 1000, 0x01, 0)
+
+    logging.info("[%s] Waiting convergence … threshold=%d (0.001°)", label, threshold)
+    while True:
+        js = arm.GetArmJointMsgs().joint_state
+        current = [
+            js.joint_1,
+            js.joint_2,
+            js.joint_3,
+            js.joint_4,
+            js.joint_5,
+            js.joint_6,
+        ]
+        max_diff = max(abs(a - b) for a, b in zip(current, target[:6]))
+        logging.debug("[%s] current=%s  target=%s  diff_max=%d", label, current, target[:6], max_diff)
+        if max_diff <= threshold:
+            logging.info("[%s] Target reached (diff %d <= %d)", label, max_diff, threshold)
+            break
+        time.sleep(LOG_PERIOD)
+
+
 def go_to_point(json_path: Path, can_name: str = DEFAULT_CAN) -> None:
     # Размещаем файлы в tracks_db
     tracks_db = Path.cwd() / "tracks_db"
@@ -56,50 +97,48 @@ def go_to_point(json_path: Path, can_name: str = DEFAULT_CAN) -> None:
     target = _load_point(json_path)
     logging.info("Target point loaded from %s: %s", json_path, target)
 
-    arm = SDK.get_instance(can_name)
     logging.info("Connecting to CAN '%s'…", can_name)
+    arm = SDK.get_instance(can_name)
     arm.ConnectPort(can_init=False)
     time.sleep(0.5)
+
+    # Сохраняем стартовую позу ДО включения моторов – это 'исходное' положение
+    start_pose = _current_pose(arm)
+    logging.info("Initial pose captured: %s", start_pose)
 
     logging.info("Enabling motors…")
     arm.EnableArm(7)
     time.sleep(0.5)
 
     logging.info("Switching to CAN MOVE J mode with 10 %% speed…")
-    arm.ModeCtrl(ctrl_mode=0x01, move_mode=0x01, move_spd_rate_ctrl=100, is_mit_mode=0x00)
+    arm.ModeCtrl(ctrl_mode=0x01, move_mode=0x01, move_spd_rate_ctrl=10, is_mit_mode=0x00)
     time.sleep(0.5)
 
-    # --- отправляем целевое положение ----------------------------------
-    logging.info("Sending target JointCtrl / GripperCtrl …")
-    arm.JointCtrl(*target[:6])
-    if len(target) == 7:
-        arm.GripperCtrl(target[6], 1000, 0x01, 0)
-
-    # --- цикл ожидания --------------------------------------------------
-    logging.info("Monitoring convergence … threshold=%d (0.001°)", THRESHOLD)
+    # --- отправляем целевое положение и ждём -----------------------------
     try:
-        while True:
-            js = arm.GetArmJointMsgs().joint_state
-            current = [
-                js.joint_1,
-                js.joint_2,
-                js.joint_3,
-                js.joint_4,
-                js.joint_5,
-                js.joint_6,
-            ]
-            max_diff = max(abs(a - b) for a, b in zip(current, target[:6]))
-            logging.info("current=%s  target=%s  diff_max=%d", current, target[:6], max_diff)
-            if max_diff <= THRESHOLD:
-                logging.info("Target reached (diff %d <= %d)", max_diff, THRESHOLD)
-                break
-            time.sleep(LOG_PERIOD)
+        _move_and_wait(arm, target, label="to_target")
+
+        # --- возврат в исходную позу -----------------------------------
+        logging.info("Holding 0.5 s at target …")
+        time.sleep(0.5)
+
+        logging.info("Returning to initial pose …")
+        _move_and_wait(arm, start_pose, label="to_start")
+
     except KeyboardInterrupt:
         logging.warning("Interrupted by user. Stopping movement …")
     finally:
-        # Ставим в standby, отключаем CAN
-        logging.info("Switching to standby and disconnecting …")
+        # Перевод в standby и отключение моторов, чтобы можно было перетащить вручную
+        logging.info("Switching to standby …")
         arm.ModeCtrl(ctrl_mode=0x00, move_mode=0x00)
+
+        logging.info("Disabling motors …")
+        try:
+            arm.DisableArm(7)
+        except Exception:  # noqa: BLE001
+            pass
+
+        logging.info("Disconnecting CAN …")
         arm.DisconnectPort()
         logging.info("Done.")
 
