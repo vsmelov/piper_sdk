@@ -72,7 +72,7 @@ if [ -n "$USB_ADDRESS" ]; then
             break
         fi
     done
-    
+    и
     if [ -z "$INTERFACE_NAME" ]; then
         echo "Error: Unable to find CAN interface corresponding to USB hardware address $USB_ADDRESS."
         exit 1

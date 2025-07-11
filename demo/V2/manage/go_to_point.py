@@ -115,11 +115,11 @@ def go_to_point(json_path: Path, can_name: str = DEFAULT_CAN) -> None:
     logging.info("Start pose reached.")
 
     # --- завершение ---------------------------------------------------------
-    logging.info("Switching to standby and disconnecting …")
-    arm.ModeCtrl(ctrl_mode=0x00, move_mode=0x00)
+        logging.info("Switching to standby and disconnecting …")
+        arm.ModeCtrl(ctrl_mode=0x00, move_mode=0x00)
     arm.DisableArm(7)  # отпускание приводов для ручного перетаскивания
-    arm.DisconnectPort()
-    logging.info("Done.")
+        arm.DisconnectPort()
+        logging.info("Done.")
 
 
 def main() -> None:
