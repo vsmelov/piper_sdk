@@ -62,6 +62,9 @@ GRIPPER_EFFORT = 4000
 # Value is a fraction; resulting gripper angle is reduced by this coefficient (tightening).
 GRIPPER_TIGHT_COEFFICEINT = 0.02  # ⚠️ changing this may break grasp reliability
 
+# Заводская нулевая поза (6 суставов + захват) в единицах SDK (0.001° / 0.001 мм)
+ZERO_POSE: List[int] = [0, 0, 0, 0, 0, 0, 0]
+
 # ---------- Настройки ----------
 DELAY_BETWEEN_TRACKS = 3  # секунд паузы между треками
 
@@ -119,8 +122,6 @@ class PiperResponse:
 
 
 class PiperTerminal:
-    # Track implementation to use by default (can be overridden in subclasses)
-    track_cls = TrackV2
     """REPL для управления одной (левой) роборукой.
 
     Команды:
@@ -129,12 +130,17 @@ class PiperTerminal:
         s                           – остановить запись
         play  <t1> [t2 ...]         – воспроизведение треков
         p  <t1> [t2 ...]            – то же, что play (alias)
-        r-0-pos                     – записать Zero-позицию
-        r-0-track [name]            – записать безопасный Zero-трек
+        pp <left> <right>           – параллельное воспроизведение для двух рук
         check-0-pos                 – максимальная дельта от Zero-позиции
         check-0-track               – минимальная дельта до Zero-треков
-        get_track_range <name>      – min/max значений суставов по всему треку
+        get_track_range <name>      – min/max значений суставов по треку
+
+    При запуске доступные руки автоматически переходят в ZERO_POSE и удерживаются.
+    Далее можно записывать/проигрывать треки.
     """
+
+    # Track implementation to use by default (can be overridden in subclasses)
+    track_cls = TrackV2
 
     def __init__(self) -> None:
         # Инициализируем каждую руку отдельно и не падаем, если одна из них недоступна.
@@ -146,6 +152,7 @@ class PiperTerminal:
                 _left_candidate.ConnectPort()
                 self.left_arm = _left_candidate
                 logging.info(f"LEFT ({CAN_LEFT}) port connected.")
+                self._goto_zero(self.left_arm, "LEFT")
             except Exception as exc:
                 logging.warning(f"LEFT ({CAN_LEFT}) connection failed: {exc}")
                 self.left_arm = None
@@ -153,19 +160,22 @@ class PiperTerminal:
             logging.warning(f"LEFT ({CAN_LEFT}) initialisation failed: {exc}")
             self.left_arm = None
 
-        # Правая рука ----------------------------------------------------------------
-        try:
-            _right_candidate = SDK.get_instance(CAN_RIGHT)
+        # Правая рука (может быть временно выключена через settings) -----------------
+        self.right_arm = None
+        if CAN_RIGHT:
             try:
-                _right_candidate.ConnectPort()
-                self.right_arm = _right_candidate
-                logging.info(f"RIGHT ({CAN_RIGHT}) port connected.")
+                _right_candidate = SDK.get_instance(CAN_RIGHT)
+                try:
+                    _right_candidate.ConnectPort()
+                    self.right_arm = _right_candidate
+                    logging.info(f"RIGHT ({CAN_RIGHT}) port connected.")
+                    self._goto_zero(self.right_arm, "RIGHT")
+                except Exception as exc:
+                    logging.warning(f"RIGHT ({CAN_RIGHT}) connection failed: {exc}")
+                    self.right_arm = None
             except Exception as exc:
-                logging.warning(f"RIGHT ({CAN_RIGHT}) connection failed: {exc}")
+                logging.warning(f"RIGHT ({CAN_RIGHT}) initialisation failed: {exc}")
                 self.right_arm = None
-        except Exception as exc:
-            logging.warning(f"RIGHT ({CAN_RIGHT}) initialisation failed: {exc}")
-            self.right_arm = None
 
         # Запись
         self._rec_thread: Optional[threading.Thread] = None
@@ -529,39 +539,7 @@ class PiperTerminal:
         )
         self._rec_thread.start()
 
-    def cmd_r_0_pos(self):
-        """Сохранить текущую позу как Zero-позицию."""
-        pos = self._current_point(self.left_arm)
-        ZERO_POS_PATH.write_text(json.dumps(pos))
-        logging.info(f"[ZERO-POS] Сохранено -> {ZERO_POS_PATH}\n           Точка: {pos}")
-
-    def cmd_r_0_track(self, *args: str):
-        """Запись безопасного Zero-трека.
-
-        usage: r-0-track [name]
-        Если name не указан – берётся метка времени.
-        """
-        if self._rec_thread and self._rec_thread.is_alive():
-            logging.info("Запись уже идёт – остановите 's'.")
-            return
-        if args and len(args) > 1:
-            logging.info("r-0-track: требуется максимум 1 аргумент.")
-            return
-        name = args[0] if args else time.strftime("%Y%m%d_%H%M%S")
-        if "__" in name or "/" in name:
-            logging.info("Имя не должно содержать '__' или '/'.")
-            return
-        json_path = _zero_track_path(name)
-        if json_path.exists():
-            if not self._confirm_overwrite(json_path):
-                return
-        arm = self.left_arm
-        logging.info(f"[REC-SAFE] {json_path.name} – перемещайте руку, 's' для стоп.")
-        self._rec_stop.clear()
-        self._rec_thread = threading.Thread(
-            target=self._rec_worker_safe, args=(arm, name), daemon=True
-        )
-        self._rec_thread.start()
+    # Удалённые команды r-0-pos / r-0-track больше не доступны.
 
     def cmd_s(self):
         if not (self._rec_thread and self._rec_thread.is_alive()):
@@ -772,7 +750,18 @@ class PiperTerminal:
         arm.MotionCtrl_1(grag_teach_ctrl=0x02)  # завершить режим записи
         logging.info("EnableArm: id_mask=7")
         arm.EnableArm(7)
-        logging.info("ModeCtrl: ctrl_mode=0x01, move_mode=0x00, move_spd_rate_ctrl=50")
+        # Переключаемся в MOVE J для перемещения
+        logging.info("ModeCtrl: ctrl_mode=0x01, move_mode=0x01, move_spd_rate_ctrl=20")
+        arm.ModeCtrl(ctrl_mode=0x01, move_mode=0x01, move_spd_rate_ctrl=20)
+
+        # --- Возвращаем руку в ZERO_POSE -----------------------------------
+        try:
+            logging.info("[REC] Moving arm to ZERO_POSE after recording …")
+            self._move_smooth(arm, ZERO_POSE, steps=120, hz=60)
+        except Exception as exc:
+            logging.warning(f"[REC] Failed to move to ZERO_POSE: {exc}")
+
+        # Снова удерживаем
         arm.ModeCtrl(ctrl_mode=0x01, move_mode=0x00, move_spd_rate_ctrl=50)
 
     # --------------------------------- play -------------------------------------------------------------
@@ -797,6 +786,11 @@ class PiperTerminal:
         if not result.ok:
             logging.error(f'bad status: {result}')
             return
+
+        # --- Переход в ZERO_POSE перед началом воспроизведения -------------
+        if not self._is_close_ignored(self._current_point(arm0), ZERO_POSE):
+            logging.info("[PLAY] Перемещаю робот в ZERO позу перед воспроизведением…")
+            self._move_smooth(arm0, ZERO_POSE)
 
         # Теперь проверка стартовой позиции трека
         first_track_start = self._load(tracks[0])[0].coordinates
@@ -869,6 +863,13 @@ class PiperTerminal:
             if not result.ok:
                 logging.error(f"[PP] Предусловия безопасности не выполнены для {full_name}: {result.error}")
                 return
+
+        # --- Переход в ZERO_POSE перед параллельным воспроизведением -------
+        for full_name in tracks:
+            arm = self._arm_from_name(full_name)
+            if not self._is_close_ignored(self._current_point(arm), ZERO_POSE):
+                logging.info(f"[PP] Перемещаю {'левую' if arm is self.left_arm else 'правую'} руку в ZERO позу…")
+                self._move_smooth(arm, ZERO_POSE)
 
         # При необходимости доводим каждую руку до стартовой точки
         for full_name in tracks:
@@ -1134,6 +1135,7 @@ class PiperTerminal:
             self._play_thread = None
             self._play_stop.set()
 
+    # -------------------------------- status helpers ---------------------------------
     def is_recording(self) -> bool:
         """Return True if a recording thread is currently active."""
         return self._rec_thread is not None and self._rec_thread.is_alive()
@@ -1151,6 +1153,7 @@ class PiperTerminal:
         self._play_thread = None
         logging.info("✓ Воспроизведение остановлено.")
 
+    # -------------------------------- cleanup ----------------------------------------
     def shutdown(self):
         """Cleanup resources (disconnect CAN) – call when GUI exits."""
         for arm in (self.left_arm, self.right_arm):
@@ -1159,15 +1162,13 @@ class PiperTerminal:
             try:
                 arm.DisconnectPort()
             except Exception:
-                # Ignore disconnect errors.
                 pass
 
-    # --------------------------------- цикл ввода ------------------------------------------------------
+    # -------------------------------- REPL loop -------------------------------------
     def repl(self):
         logging.info(
             "Piper terminal v2. help – список команд. Ctrl+D/Ctrl+C – выход."
         )
-        # Показываем справку сразу, чтобы пользователь видел доступные команды
         logging.info(self.__doc__)
         while True:
             try:
@@ -1179,27 +1180,20 @@ class PiperTerminal:
                 continue
             tokens = line.split()
             cmd, *args = tokens
-            attr = f"cmd_{cmd.replace('-', '_')}"  # поддержка дефисов
+            attr = f"cmd_{cmd.replace('-', '_')}"
             try:
                 getattr(self, attr)(*args)  # type: ignore[attr-defined]
-            except AttributeError as exc:
-                logging.exception(f'AttributeError: {exc}')
+            except AttributeError:
                 if cmd == "help":
                     logging.info(self.__doc__)
                 else:
-                    logging.warning(f"Неизвестная команда: {cmd=}, {attr=}")
-            except TypeError as e:
-                logging.exception(f"[ARGS] {e}")
-            except Exception:  # noqa: BLE001
+                    logging.warning(f"Неизвестная команда: {cmd}")
+            except Exception:
                 logging.exception("[EXCEPTION] Unhandled error")
-        # корректно закрываем левую руку, если она была инициализирована
-        try:
-            if self.left_arm is not None:
-                self.left_arm.DisconnectPort()
-        except Exception:
-            pass
+        # disconnect
+        self.shutdown()
 
-    # Алиасы коротких команд --------------------------------------------------
+    # -------------------------------- aliases ---------------------------------------
     def cmd_r(self, *args: str):
         """Alias for record."""
         self.cmd_record(*args)
@@ -1212,12 +1206,9 @@ class PiperTerminal:
         """Alias for play_parallel."""
         self.cmd_play_parallel(*args)
 
-    # ---------------------------- hook helpers ----------------------------
+    # ----------------------- hook / utility helpers ---------------------------------
     def set_point_hook(self, func):
-        """Register a callback called on every _send_point during playback.
-
-        Pass None to remove the hook.
-        """
+        """Register a callback called on every _send_point during playback."""
         self._point_hook = func
 
     @staticmethod
@@ -1227,6 +1218,27 @@ class PiperTerminal:
         if GRIPPER_TIGHT_COEFFICEINT > 0:
             eff[6] = int(eff[6] * (1 - GRIPPER_TIGHT_COEFFICEINT))
         return eff
+
+    # ------------------------ startup zero helper -----------------------------------
+    def _goto_zero(self, arm, label: str = "ARM") -> None:
+        """Enable *arm* and move it to ZERO_POSE, then switch to hold-mode."""
+        try:
+            arm.EnableArm(7)
+            time.sleep(0.5)
+            arm.ModeCtrl(ctrl_mode=0x01, move_mode=0x01, move_spd_rate_ctrl=10, is_mit_mode=0x00)
+            time.sleep(0.5)
+            arm.JointCtrl(*ZERO_POSE[:6])
+            arm.GripperCtrl(ZERO_POSE[6], 1000, 0x01, 0)
+            while True:
+                js = arm.GetArmJointMsgs().joint_state
+                curr = [js.joint_1, js.joint_2, js.joint_3, js.joint_4, js.joint_5, js.joint_6]
+                if max(abs(a - b) for a, b in zip(curr, ZERO_POSE[:6])) <= 50:
+                    break
+                time.sleep(0.1)
+            arm.ModeCtrl(ctrl_mode=0x01, move_mode=0x00)
+            logging.info(f"[INIT] {label} moved to ZERO pose and holding.")
+        except Exception as exc:
+            logging.warning(f"[INIT] Failed to move {label} to ZERO pose: {exc}")
 
 
 # -------------------------------------------------------------------- MAIN

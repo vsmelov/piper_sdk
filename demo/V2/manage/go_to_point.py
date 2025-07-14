@@ -61,45 +61,63 @@ def go_to_point(json_path: Path, can_name: str = DEFAULT_CAN) -> None:
     arm.ConnectPort(can_init=False)
     time.sleep(0.5)
 
+    # Считываем исходную позу ДО включения моторов – будем возвращаться к ней
+    js_init = arm.GetArmJointMsgs().joint_state
+    gr_init = arm.GetArmGripperMsgs().gripper_state
+    start_pose = [
+        js_init.joint_1,
+        js_init.joint_2,
+        js_init.joint_3,
+        js_init.joint_4,
+        js_init.joint_5,
+        js_init.joint_6,
+        gr_init.grippers_angle,
+    ]
+    logging.info("Captured start pose: %s", start_pose)
+
     logging.info("Enabling motors…")
     arm.EnableArm(7)
     time.sleep(0.5)
 
     logging.info("Switching to CAN MOVE J mode with 10 %% speed…")
-    arm.ModeCtrl(ctrl_mode=0x01, move_mode=0x01, move_spd_rate_ctrl=100, is_mit_mode=0x00)
+    arm.ModeCtrl(ctrl_mode=0x01, move_mode=0x01, move_spd_rate_ctrl=10, is_mit_mode=0x00)
     time.sleep(0.5)
 
-    # --- отправляем целевое положение ----------------------------------
-    logging.info("Sending target JointCtrl / GripperCtrl …")
-    arm.JointCtrl(*target[:6])
-    if len(target) == 7:
-        arm.GripperCtrl(target[6], 1000, 0x01, 0)
-
-    # --- цикл ожидания --------------------------------------------------
-    logging.info("Monitoring convergence … threshold=%d (0.001°)", THRESHOLD)
-    try:
+    # --- helper to send pose and wait until reached --------------------------
+    def _send_and_wait(pose: List[int]):
+        arm.JointCtrl(*pose[:6])
+        if len(pose) == 7:
+            arm.GripperCtrl(pose[6], 1000, 0x01, 0)
         while True:
-            js = arm.GetArmJointMsgs().joint_state
-            current = [
-                js.joint_1,
-                js.joint_2,
-                js.joint_3,
-                js.joint_4,
-                js.joint_5,
-                js.joint_6,
+            js_curr = arm.GetArmJointMsgs().joint_state
+            curr = [
+                js_curr.joint_1,
+                js_curr.joint_2,
+                js_curr.joint_3,
+                js_curr.joint_4,
+                js_curr.joint_5,
+                js_curr.joint_6,
             ]
-            max_diff = max(abs(a - b) for a, b in zip(current, target[:6]))
-            logging.info("current=%s  target=%s  diff_max=%d", current, target[:6], max_diff)
+            max_diff = max(abs(a - b) for a, b in zip(curr, pose[:6]))
+            logging.info("current=%s  target=%s  diff_max=%d", curr, pose[:6], max_diff)
             if max_diff <= THRESHOLD:
-                logging.info("Target reached (diff %d <= %d)", max_diff, THRESHOLD)
                 break
             time.sleep(LOG_PERIOD)
-    except KeyboardInterrupt:
-        logging.warning("Interrupted by user. Stopping movement …")
-    finally:
-        # Ставим в standby, отключаем CAN
+
+    # --- переход к целевой точке -------------------------------------------
+    logging.info("Moving to target pose …")
+    _send_and_wait(target)
+    logging.info("Target reached.")
+
+    # --- возврат к исходной позе -------------------------------------------
+    logging.info("Returning to start pose …")
+    _send_and_wait(start_pose)
+    logging.info("Start pose reached.")
+
+    # --- завершение ---------------------------------------------------------
         logging.info("Switching to standby and disconnecting …")
         arm.ModeCtrl(ctrl_mode=0x00, move_mode=0x00)
+    arm.DisableArm(7)  # отпускание приводов для ручного перетаскивания
         arm.DisconnectPort()
         logging.info("Done.")
 
