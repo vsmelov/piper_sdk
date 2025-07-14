@@ -109,7 +109,7 @@ def set_zero(can_name: str = DEFAULT_CAN):
 
     def _set_joint(j:int):
         logging.info("Set zero (index %d)", j-1)
-        arm.JointConfig(joint_num=j, set_zero=0xAE, max_joint_acc=0x7FFF)  # type: ignore[arg-type]
+        arm.JointConfig(joint_num=j, set_zero=0xAE)  # type: ignore[arg-type]
         time.sleep(0.1)
 
     if mode == "a":

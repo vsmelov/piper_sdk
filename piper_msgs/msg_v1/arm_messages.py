@@ -43,7 +43,7 @@ class PiperMessage:
     '''
     msg_v1
     
-    Piper机械臂全部消息,为所有消息的汇总
+    Все сообщения механического манипулятора Piper, объединённые в один класс
     '''
     '''
     msg_v1
@@ -83,32 +83,31 @@ class PiperMessage:
                 arm_end_vel_acc_param_config:'ArmMsgEndVelAccParamConfig'=None,
                 arm_crash_protection_rating_config:'ArmMsgCrashProtectionRatingConfig'=None
                 ):
-        #-------------------------------feedback-------------------------------------------
-        # 初始化数据帧类型
+        # Инициализация типа кадра данных
         self.type_ = type_
-        # 初始化机械臂状态消息
+        # Инициализация сообщения состояния манипулятора
         self.arm_status_msgs = arm_status_msgs if arm_status_msgs else ArmMsgStatus()
-        # 初始化机械臂关节反馈
+        # Инициализация обратной связи суставов манипулятора
         self.arm_joint_feedback = arm_joint_feedback if arm_joint_feedback else ArmMsgJointFeedBack()
-        # 初始化夹爪反馈
+        # Инициализация обратной связи захвата
         self.gripper_feedback = gripper_feedback if gripper_feedback else ArmMsgGripperFeedBack()
-        # 初始化末端姿态反馈
+        # Инициализация обратной связи конечной позы
         self.arm_end_pose = arm_end_pose if arm_end_pose else ArmMsgEndPoseFeedBack()
-        # 驱动器信息高速反馈
+        # Высокоскоростная обратная связь привода
         self.arm_high_spd_feedback_1 = arm_high_spd_feedback if arm_high_spd_feedback else ArmHighSpdFeedback()
         self.arm_high_spd_feedback_2 = arm_high_spd_feedback if arm_high_spd_feedback else ArmHighSpdFeedback()
         self.arm_high_spd_feedback_3 = arm_high_spd_feedback if arm_high_spd_feedback else ArmHighSpdFeedback()
         self.arm_high_spd_feedback_4 = arm_high_spd_feedback if arm_high_spd_feedback else ArmHighSpdFeedback()
         self.arm_high_spd_feedback_5 = arm_high_spd_feedback if arm_high_spd_feedback else ArmHighSpdFeedback()
         self.arm_high_spd_feedback_6 = arm_high_spd_feedback if arm_high_spd_feedback else ArmHighSpdFeedback()
-        # 驱动器信息低速反馈
+        # Низкоскоростная обратная связь привода
         self.arm_low_spd_feedback_1 = arm_low_spd_feedback if arm_low_spd_feedback else ArmLowSpdFeedback()
         self.arm_low_spd_feedback_2 = arm_low_spd_feedback if arm_low_spd_feedback else ArmLowSpdFeedback()
         self.arm_low_spd_feedback_3 = arm_low_spd_feedback if arm_low_spd_feedback else ArmLowSpdFeedback()
         self.arm_low_spd_feedback_4 = arm_low_spd_feedback if arm_low_spd_feedback else ArmLowSpdFeedback()
         self.arm_low_spd_feedback_5 = arm_low_spd_feedback if arm_low_spd_feedback else ArmLowSpdFeedback()
         self.arm_low_spd_feedback_6 = arm_low_spd_feedback if arm_low_spd_feedback else ArmLowSpdFeedback()
-        #-------------------------------transmit-------------------------------------------
+        # Команда включения/выключения двигателя
         self.arm_motion_ctrl_1 = arm_motion_ctrl_1 if arm_motion_ctrl_1 else ArmMsgMotionCtrl_1()
         self.arm_motion_ctrl_2 = arm_motion_ctrl_2 if arm_motion_ctrl_2 else ArmMsgMotionCtrl_2()
         self.arm_motion_ctrl_cartesian = arm_motion_ctrl_cartesian if arm_motion_ctrl_cartesian else ArmMsgMotionCtrlCartesian()
@@ -117,51 +116,51 @@ class PiperMessage:
             if arm_circular_ctrl else ArmMsgCircularPatternCoordNumUpdateCtrl()
         self.arm_gripper_ctrl = arm_gripper_ctrl if arm_gripper_ctrl else ArmMsgGripperCtrl()
         self.arm_ms_config = arm_ms_config if arm_ms_config else ArmMsgMasterSlaveModeConfig()
-        # 电机使能/失能设置指令
+        # Команда запроса ограничений угла/максимальной скорости/максимального ускорения двигателя
         self.arm_motor_enable = arm_motor_enable if arm_motor_enable else ArmMsgMotorEnableDisableConfig()
-        # 查询电机角度/最大速度/最大加速度限制指令
+        # Команда запроса ограничений угла/максимальной скорости двигателя
         self.arm_search_motor_max_angle_spd_acc_limit = arm_search_motor_max_angle_spd_acc_limit \
             if arm_search_motor_max_angle_spd_acc_limit else ArmMsgSearchMotorMaxAngleSpdAccLimit()
-        # 反馈当前电机限制角度/最大速度
+        # Обратная связь текущих ограничений угла/максимальной скорости двигателя
         self.arm_feedback_current_motor_angle_limit_max_spd = arm_feedback_current_motor_angle_limit_max_spd \
             if arm_feedback_current_motor_angle_limit_max_spd else ArmMsgFeedbackCurrentMotorAngleLimitMaxSpd()
-        # 电机角度限制/最大速度设置指令
+        # Команда установки ограничений угла/максимальной скорости двигателя
         self.arm_motor_angle_limit_max_spd_set = arm_motor_angle_limit_max_spd_set \
             if arm_motor_angle_limit_max_spd_set else ArmMsgMotorAngleLimitMaxSpdSet()
-        # 关节设置指令
+        # Команда настройки суставов
         self.arm_joint_config = arm_joint_config \
             if arm_joint_config else ArmMsgJointConfig()
-        # 设置指令应答
+        # Ответ на команду настройки
         self.arm_set_instruction_response = arm_set_instruction_response \
             if arm_set_instruction_response else ArmMsgInstructionResponseConfig()
-        # 机械臂参数查询与设置指令
+        # Команда запроса и настройки параметров манипулятора
         self.arm_param_enquiry_and_config = arm_param_enquiry_and_config \
             if arm_param_enquiry_and_config else ArmMsgParamEnquiryAndConfig()
-        # 反馈当前末端速度/加速度参数
+        # Обратная связь текущих параметров скорости/ускорения конца
         self.arm_feedback_current_end_vel_acc_param = arm_feedback_current_end_vel_acc_param \
             if arm_feedback_current_end_vel_acc_param else ArmMsgFeedbackCurrentEndVelAccParam()
-        # 末端速度/加速度参数设置指令
+        # Команда установки параметров скорости/ускорения конца
         self.arm_end_vel_acc_param_config = arm_end_vel_acc_param_config \
             if arm_end_vel_acc_param_config else ArmMsgEndVelAccParamConfig()
-        # 碰撞防护等级设置指令
+        # Команда установки уровня защиты от столкновений
         self.arm_crash_protection_rating_config = arm_crash_protection_rating_config \
             if arm_crash_protection_rating_config else ArmMsgCrashProtectionRatingConfig()
-        # 碰撞防护等级设置反馈指令
+        # Обратная связь установки уровня защиты от столкновений
         self.arm_crash_protection_rating_feedback = arm_crash_protection_rating_feedback \
             if arm_crash_protection_rating_feedback else ArmMsgCrashProtectionRatingFeedback()
-        # 反馈当前电机最大加速度限制
+        # Обратная связь текущего ограничения максимального ускорения двигателя
         self.arm_feedback_current_motor_max_acc_limit = arm_feedback_current_motor_max_acc_limit \
             if arm_feedback_current_motor_max_acc_limit else ArmMsgFeedbackCurrentMotorMaxAccLimit()
-        # 反馈各个关节当前末端速度/加速度
+        # Обратная связь текущей скорости/ускорения конца для каждого сустава
         # self.arm_feedback_joint_vel_acc = arm_feedback_joint_vel_acc \
         #     if arm_feedback_joint_vel_acc else ArmMsgFeedbackJointVelAcc()
-        # 全部的电机当前限制角度/最大速度
+        # Текущие ограничения угла/максимальной скорости всех двигателей
         # self.arm_feedback_all_current_motor_angle_limit_max_spd = arm_feedback_all_current_motor_angle_limit_max_spd \
         #     if arm_feedback_all_current_motor_angle_limit_max_spd else ArmMsgFeedbackAllCurrentMotorAngleLimitMaxSpd()
-        # # 全部的电机最大加速度限制
+        # # Ограничение максимального ускорения всех двигателей
         # self.arm_feedback_all_motor_max_acc_limit = arm_feedback_all_motor_max_acc_limit \
         #     if arm_feedback_all_motor_max_acc_limit else ArmMsgFeedbackAllCurrentMotorMaxAccLimit()
-        # # 机械臂固件字符存储值,只存储8位字符,在interface中做了拼接
+        # # Строковое значение прошивки манипулятора (хранится 8 символов, объединение выполняется в interface)
         self.firmware_data = bytearray()
 
     def __str__(self):

@@ -2695,8 +2695,17 @@ class C_PiperInterface_V2():
             clear_joint_err: Command to clear joint error codes, with a valid value of 0xAE.
         '''
         tx_can = Message()
-        joint_config = ArmMsgJointConfig(joint_num, set_zero, acc_param_is_effective, max_joint_acc, clear_err)
-        msg = PiperMessage(type_=ArmMsgType.PiperMsgJointConfig,arm_joint_config=joint_config)
+        joint_config = ArmMsgJointConfig(
+            joint_num,
+            set_zero,
+            acc_param_is_effective,
+            max_joint_acc,
+            clear_err,
+        )
+        msg = PiperMessage(
+            type_=ArmMsgType.PiperMsgJointConfig,
+            arm_joint_config=joint_config,
+        )
         self.__parser.EncodeMessage(msg, tx_can)
         self.__arm_can.SendCanMessage(tx_can.arbitration_id, tx_can.data)
     

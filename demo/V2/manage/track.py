@@ -101,6 +101,10 @@ class TrackBase:
         except Exception as exc:
             raise ValueError(f"Failed to read track {name}: {exc}") from exc
 
+        # -------------------------------- new v3 detection -----------------------------
+        if isinstance(obj, dict) and obj.get("version") == TrackV3Timed.version:
+            return TrackV3Timed(name)
+        # -------------------------------- existing v2 detection -------------------------
         if isinstance(obj, dict) and obj.get("version") == "v2.0":
             return TrackV2(name)
         # Fallback to legacy v1 format
@@ -265,3 +269,96 @@ class TrackV2(TrackBase):
         path.write_text(json.dumps(content))
         details_path = TRACK_DIR / f"{name}.details.json"
         details_path.write_text(json.dumps(details)) 
+
+# ------------------------------ NEW – Timed control-point track ------------------------------
+class TrackV3Timed(TrackBase):
+    """Trajectory represented as a sequence of control points with per-segment duration.
+
+    The JSON structure is::
+        {
+          "version": "v3.0",
+          "points": [
+            {"pt": [..7 ints..], "duration": 0},           # first point, duration ignored
+            {"pt": [..], "duration": 2.5},                 # seconds to move from previous → current
+            ...
+          ]
+        }
+    """
+
+    version: str = "v3.0"
+
+    # ----------------------------- cached raw ------------------------
+    def __init__(self, name: str) -> None:
+        super().__init__(name)
+        obj = json.loads(self.path.read_text())
+        if not (isinstance(obj, dict) and obj.get("version") == self.version):
+            raise ValueError(f"File {self.path} is not a v3.0 timed track")
+        self._raw = obj
+        self._pts = obj.get("points", [])
+        if not isinstance(self._pts, list):
+            raise ValueError("'points' must be a list in v3 track")
+        # Basic sanity check
+        for idx, item in enumerate(self._pts):
+            if "pt" not in item or "duration" not in item:
+                raise ValueError(f"Each point entry must contain 'pt' and 'duration' (idx={idx})")
+
+    # -------------------------------- helpers -----------------------
+    @property
+    def points(self) -> List[List[int]]:
+        return [item["pt"] for item in self._pts]
+
+    @property
+    def durations(self) -> List[float]:
+        return [float(item["duration"]) for item in self._pts]
+
+    # For compatibility generate cumulative timestamps
+    @property
+    def timestamps(self) -> List[float]:
+        ts: List[float] = []
+        acc = 0.0
+        for dur in self.durations:
+            acc += float(dur)
+            ts.append(acc)
+        # First timestamp usually equals first duration (could be 0)
+        return ts
+
+    @property
+    def track_points(self) -> List["TrackPoint"]:
+        # Timed tracks do not store telemetry; generate stub TrackPoint objects
+        stubs: List[TrackPoint] = []
+        for ts_val, pt in zip(self.timestamps, self.points):
+            stubs.append(
+                TrackPoint(
+                    coordinates_timestamp=ts_val,
+                    coordinates=pt,
+                    details_timestamp=ts_val,
+                    motor_speed_rpm=[0]*6,
+                    motor_current_ma=[0]*6,
+                    voltage_mv=[0]*6,
+                    motor_pos_deg001=[0]*6,
+                    motor_effort_mNm=[0]*6,
+                    foc_temp_c=[0]*6,
+                    motor_temp_c=[0]*6,
+                    bus_current_ma=[0]*6,
+                )
+            )
+        return stubs
+
+    # ----------------------------- writers --------------------------
+    @classmethod
+    def write_from_points(
+        cls,
+        name: str,
+        points: List[List[int]],
+        durations: List[float],
+    ) -> None:
+        if len(points) != len(durations):
+            raise ValueError("points and durations must be same length")
+        path = TRACK_DIR / f"{name}.json"
+        payload = {
+            "version": cls.version,
+            "points": [
+                {"pt": pt, "duration": float(dur)} for pt, dur in zip(points, durations)
+            ],
+        }
+        path.write_text(json.dumps(payload, indent=2)) 

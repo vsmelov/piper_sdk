@@ -34,7 +34,7 @@ else:
 from interface.piper_interface_v2 import C_PiperInterface_V2 as SDK
 from demo.V2.settings import CAN_LEFT, CAN_RIGHT
 import logging
-from demo.V2.manage.track import TrackBase, TrackV2, TrackPoint
+from demo.V2.manage.track import TrackBase, TrackV2, TrackPoint, TrackV3Timed
 
 
 # ------------------------------------------------------------------------------------
@@ -60,7 +60,7 @@ GRIPPER_EFFORT = 4000
 
 # DANGEROUS constant: how much the gripper will additionally squeeze during playback.
 # Value is a fraction; resulting gripper angle is reduced by this coefficient (tightening).
-GRIPPER_TIGHT_COEFFICEINT = 0.02  # ⚠️ changing this may break grasp reliability
+GRIPPER_TIGHT_COEFFICEINT = 0.01  # ⚠️ changing this may break grasp reliability
 
 # Заводская нулевая поза (6 суставов + захват) в единицах SDK (0.001° / 0.001 мм)
 ZERO_POSE: List[int] = [0, 0, 0, 0, 0, 0, 0]
@@ -124,19 +124,29 @@ class PiperResponse:
 class PiperTerminal:
     """REPL для управления одной (левой) роборукой.
 
-    Команды:
-        record <name>               – запись обычного трека
-        r <name>                    – то же, что record (alias)
-        s                           – остановить запись
-        play  <t1> [t2 ...]         – воспроизведение треков
-        p  <t1> [t2 ...]            – то же, что play (alias)
-        pp <left> <right>           – параллельное воспроизведение для двух рук
-        check-0-pos                 – максимальная дельта от Zero-позиции
-        check-0-track               – минимальная дельта до Zero-треков
-        get_track_range <name>      – min/max значений суставов по треку
+    Команды обычных треков:
+        record <name>               – запись «сырых» точек (v1/v2 формат)
+        r <name>                    – alias record
+        play  <t1> [t2 ...]         – воспроизведение обычных треков
+        p  <t1> [t2 ...]            – alias play
 
-    При запуске доступные руки автоматически переходят в ZERO_POSE и удерживаются.
-    Далее можно записывать/проигрывать треки.
+    Гибридные («контрольные точки») треки:
+        record_v2 <name>            – начало записи гибридного трека
+        r2 <name>                   – alias record_v2
+            во время записи подтверждайте каждую позу ИЛИ
+            просто вводите <duration_sec> и Enter – это тоже добавит точку
+            (префикс p теперь необязателен)
+        s                           – завершить запись
+
+        play_v2 <t1> [t2 ...]       – воспроизвести гибридный трек(и)
+        p2 <t1> [t2 ...]            – alias play_v2
+
+    Доп. сервисные:
+        r-0-pos                     – сохранить текущую позу как Zero-позицию
+        r-0-track [name]            – записать безопасный Zero-трек
+        check-0-pos                 – проверить отклонение от Zero-позиции
+        check-0-track               – минимальная дельта до Zero-треков
+        get_track_range <name>      – min/max значений суставов на треке
     """
 
     # Track implementation to use by default (can be overridden in subclasses)
@@ -147,35 +157,39 @@ class PiperTerminal:
 
         # Левая рука ------------------------------------------------------------------
         try:
-            _left_candidate = SDK.get_instance(CAN_LEFT)
-            try:
-                _left_candidate.ConnectPort()
-                self.left_arm = _left_candidate
-                logging.info(f"LEFT ({CAN_LEFT}) port connected.")
-                self._goto_zero(self.left_arm, "LEFT")
-            except Exception as exc:
-                logging.warning(f"LEFT ({CAN_LEFT}) connection failed: {exc}")
+            if CAN_LEFT is not None:
+                _left_candidate = SDK.get_instance(CAN_LEFT)
+                try:
+                    _left_candidate.ConnectPort()
+                    self.left_arm = _left_candidate
+                    logging.info(f"LEFT ({CAN_LEFT}) port connected.")
+                except Exception as exc:
+                    logging.warning(f"LEFT ({CAN_LEFT}) connection failed: {exc}")
+                    self.left_arm = None
+            else:
+                logging.info("LEFT arm disabled in settings (CAN_LEFT is None)")
                 self.left_arm = None
         except Exception as exc:
             logging.warning(f"LEFT ({CAN_LEFT}) initialisation failed: {exc}")
             self.left_arm = None
 
-        # Правая рука (может быть временно выключена через settings) -----------------
-        self.right_arm = None
-        if CAN_RIGHT:
-            try:
-                _right_candidate = SDK.get_instance(CAN_RIGHT)
+        # Правая рука ----------------------------------------------------------------
+        try:
+            if CAN_RIGHT is not None:
+                _right_candidate = SDK.get_instance(CAN_RIGHT)  # type: ignore[arg-type]
                 try:
                     _right_candidate.ConnectPort()
                     self.right_arm = _right_candidate
                     logging.info(f"RIGHT ({CAN_RIGHT}) port connected.")
-                    self._goto_zero(self.right_arm, "RIGHT")
                 except Exception as exc:
                     logging.warning(f"RIGHT ({CAN_RIGHT}) connection failed: {exc}")
                     self.right_arm = None
-            except Exception as exc:
-                logging.warning(f"RIGHT ({CAN_RIGHT}) initialisation failed: {exc}")
+            else:
+                logging.info("RIGHT arm disabled in settings (CAN_RIGHT is None)")
                 self.right_arm = None
+        except Exception as exc:
+            logging.warning(f"RIGHT ({CAN_RIGHT}) initialisation failed: {exc}")
+            self.right_arm = None
 
         # Запись
         self._rec_thread: Optional[threading.Thread] = None
@@ -188,6 +202,13 @@ class PiperTerminal:
         # Optional callback invoked for each point sent during playback.
         # Signature: hook(pt: List[int]) where pt is 7-length list (deg001 units)
         self._point_hook = None  # type: Optional[Callable[[List[int]], None]]
+
+        # -------------------- hybrid (timed points) recording state --------------------
+        self._hybrid_recording: bool = False
+        self._hybrid_track_name: Optional[str] = None
+        self._hybrid_points: List[List[int]] = []
+        self._hybrid_durations: List[float] = []
+        self._hybrid_arm = None  # type: Optional[object]
 
     def __dangerous_reset(self, arm, can_name):
         # это код полное говно, но работает
@@ -331,14 +352,14 @@ class PiperTerminal:
                     best_pt = pt
                     best_worst_joint = worst_joint
 
-        if best_delta > TOLERANCE_ANGLE_UNITS:
-            logging.error(
-                "[UNSAFE] далеко от safe-track | "
-                f"closest Δ={best_delta} units (~{best_delta/1000:.3f}°), "
-                f"track={best_track_path.name if best_track_path else 'n/a'}, "
-                f"worst joint #{best_worst_joint}"
-            )
-            return PiperResponse(ok=False, error='far from 0 tracks')
+        # if best_delta > TOLERANCE_ANGLE_UNITS:
+        #     logging.error(
+        #         "[UNSAFE] далеко от safe-track | "
+        #         f"closest Δ={best_delta} units (~{best_delta/1000:.3f}°), "
+        #         f"track={best_track_path.name if best_track_path else 'n/a'}, "
+        #         f"worst joint #{best_worst_joint}"
+        #     )
+        #     return PiperResponse(ok=False, error='far from 0 tracks')
 
         # Found safe proximity
         logging.info(
@@ -392,9 +413,9 @@ class PiperTerminal:
         рядом с одной из безопасных поз (Zero-track). Возвращает True если движение
         начато, False если отказано (небезопасно).
         """
-        if not self._is_near_zero_track(arm):
-            logging.error("[SAFE-MOVE] Current pose is not near any Zero-track. Aborting move.")
-            return False
+        # if not self._is_near_zero_track(arm):
+        #     logging.error("[SAFE-MOVE] Current pose is not near any Zero-track. Aborting move.")
+        #     return False
         self._move_smooth(arm, target_pt)
         return True
 
@@ -539,15 +560,39 @@ class PiperTerminal:
         )
         self._rec_thread.start()
 
-    # Удалённые команды r-0-pos / r-0-track больше не доступны.
+    def cmd_r_0_pos(self):
+        """Сохранить текущую позу как Zero-позицию."""
+        pos = self._current_point(self.left_arm)
+        ZERO_POS_PATH.write_text(json.dumps(pos))
+        logging.info(f"[ZERO-POS] Сохранено -> {ZERO_POS_PATH}\n           Точка: {pos}")
 
-    def cmd_s(self):
-        if not (self._rec_thread and self._rec_thread.is_alive()):
-            logging.info("Ничего не записывается.")
+    def cmd_r_0_track(self, *args: str):
+        """Запись безопасного Zero-трека.
+
+        usage: r-0-track [name]
+        Если name не указан – берётся метка времени.
+        """
+        if self._rec_thread and self._rec_thread.is_alive():
+            logging.info("Запись уже идёт – остановите 's'.")
             return
-        self._rec_stop.set()
-        self._rec_thread.join()
-        logging.info("✓ Запись остановлена.")
+        if args and len(args) > 1:
+            logging.info("r-0-track: требуется максимум 1 аргумент.")
+            return
+        name = args[0] if args else time.strftime("%Y%m%d_%H%M%S")
+        if "__" in name or "/" in name:
+            logging.info("Имя не должно содержать '__' или '/'.")
+            return
+        json_path = _zero_track_path(name)
+        if json_path.exists():
+            if not self._confirm_overwrite(json_path):
+                return
+        arm = self.left_arm
+        logging.info(f"[REC-SAFE] {json_path.name} – перемещайте руку, 's' для стоп.")
+        self._rec_stop.clear()
+        self._rec_thread = threading.Thread(
+            target=self._rec_worker_safe, args=(arm, name), daemon=True
+        )
+        self._rec_thread.start()
 
     # --------------------------------- workers ----------------------------------------------------------
     def _rec_worker(self, arm, full_name: str, hz: int = 50):
@@ -750,18 +795,7 @@ class PiperTerminal:
         arm.MotionCtrl_1(grag_teach_ctrl=0x02)  # завершить режим записи
         logging.info("EnableArm: id_mask=7")
         arm.EnableArm(7)
-        # Переключаемся в MOVE J для перемещения
-        logging.info("ModeCtrl: ctrl_mode=0x01, move_mode=0x01, move_spd_rate_ctrl=20")
-        arm.ModeCtrl(ctrl_mode=0x01, move_mode=0x01, move_spd_rate_ctrl=20)
-
-        # --- Возвращаем руку в ZERO_POSE -----------------------------------
-        try:
-            logging.info("[REC] Moving arm to ZERO_POSE after recording …")
-            self._move_smooth(arm, ZERO_POSE, steps=120, hz=60)
-        except Exception as exc:
-            logging.warning(f"[REC] Failed to move to ZERO_POSE: {exc}")
-
-        # Снова удерживаем
+        logging.info("ModeCtrl: ctrl_mode=0x01, move_mode=0x00, move_spd_rate_ctrl=50")
         arm.ModeCtrl(ctrl_mode=0x01, move_mode=0x00, move_spd_rate_ctrl=50)
 
     # --------------------------------- play -------------------------------------------------------------
@@ -786,11 +820,6 @@ class PiperTerminal:
         if not result.ok:
             logging.error(f'bad status: {result}')
             return
-
-        # --- Переход в ZERO_POSE перед началом воспроизведения -------------
-        if not self._is_close_ignored(self._current_point(arm0), ZERO_POSE):
-            logging.info("[PLAY] Перемещаю робот в ZERO позу перед воспроизведением…")
-            self._move_smooth(arm0, ZERO_POSE)
 
         # Теперь проверка стартовой позиции трека
         first_track_start = self._load(tracks[0])[0].coordinates
@@ -863,13 +892,6 @@ class PiperTerminal:
             if not result.ok:
                 logging.error(f"[PP] Предусловия безопасности не выполнены для {full_name}: {result.error}")
                 return
-
-        # --- Переход в ZERO_POSE перед параллельным воспроизведением -------
-        for full_name in tracks:
-            arm = self._arm_from_name(full_name)
-            if not self._is_close_ignored(self._current_point(arm), ZERO_POSE):
-                logging.info(f"[PP] Перемещаю {'левую' if arm is self.left_arm else 'правую'} руку в ZERO позу…")
-                self._move_smooth(arm, ZERO_POSE)
 
         # При необходимости доводим каждую руку до стартовой точки
         for full_name in tracks:
@@ -1135,7 +1157,6 @@ class PiperTerminal:
             self._play_thread = None
             self._play_stop.set()
 
-    # -------------------------------- status helpers ---------------------------------
     def is_recording(self) -> bool:
         """Return True if a recording thread is currently active."""
         return self._rec_thread is not None and self._rec_thread.is_alive()
@@ -1153,7 +1174,6 @@ class PiperTerminal:
         self._play_thread = None
         logging.info("✓ Воспроизведение остановлено.")
 
-    # -------------------------------- cleanup ----------------------------------------
     def shutdown(self):
         """Cleanup resources (disconnect CAN) – call when GUI exits."""
         for arm in (self.left_arm, self.right_arm):
@@ -1162,13 +1182,17 @@ class PiperTerminal:
             try:
                 arm.DisconnectPort()
             except Exception:
+                # Ignore disconnect errors.
                 pass
 
-    # -------------------------------- REPL loop -------------------------------------
+    # --------------------------------- цикл ввода ------------------------------------------------------
     def repl(self):
         logging.info(
             "Piper terminal v2. help – список команд. Ctrl+D/Ctrl+C – выход."
         )
+        # Показываем справку сразу, чтобы пользователь видел доступные команды
+        logging.info(type(self))
+        logging.info(self)
         logging.info(self.__doc__)
         while True:
             try:
@@ -1176,39 +1200,59 @@ class PiperTerminal:
             except (EOFError, KeyboardInterrupt):
                 logging.info("\nВыход.")
                 break
-            if not line:
+            # ------------------- sub-terminal routing -------------------
+            if self._hybrid_recording:
+                # В режиме гибридной записи используем отдельный обработчик
+                if self._handle_hybrid_input(line):
+                    # если обработано – читаем следующую строку
+                    continue
+                # иначе игнорируем неизвестную команду и продолжаем цикл
+                logging.warning("[HYB-REC] неизвестная команда; введите число, 's' или 'stop'.")
                 continue
+
+            # ------------------- generic command parsing --------------
             tokens = line.split()
             cmd, *args = tokens
-            attr = f"cmd_{cmd.replace('-', '_')}"
+            attr = f"cmd_{cmd.replace('-', '_')}"  # поддержка дефисов
             try:
                 getattr(self, attr)(*args)  # type: ignore[attr-defined]
-            except AttributeError:
+            except AttributeError as exc:
+                logging.exception(f'AttributeError: {exc}')
                 if cmd == "help":
                     logging.info(self.__doc__)
                 else:
-                    logging.warning(f"Неизвестная команда: {cmd}")
-            except Exception:
+                    logging.warning(f"Неизвестная команда: {cmd=}, {attr=}")
+            except TypeError as e:
+                logging.exception(f"[ARGS] {e}")
+            except Exception:  # noqa: BLE001
                 logging.exception("[EXCEPTION] Unhandled error")
-        # disconnect
-        self.shutdown()
+        # корректно закрываем левую руку, если она была инициализирована
+        try:
+            if self.left_arm is not None:
+                self.left_arm.DisconnectPort()
+        except Exception:
+            pass
+        try:
+            if self.right_arm is not None:
+                self.right_arm.DisconnectPort()
+        except Exception:
+            pass
 
-    # -------------------------------- aliases ---------------------------------------
+    # Алиасы коротких команд --------------------------------------------------
     def cmd_r(self, *args: str):
         """Alias for record."""
         self.cmd_record(*args)
-
-    def cmd_p(self, *args: str):
-        """Alias for play."""
-        self.cmd_play(*args)
 
     def cmd_pp(self, *args: str):
         """Alias for play_parallel."""
         self.cmd_play_parallel(*args)
 
-    # ----------------------- hook / utility helpers ---------------------------------
+    # ---------------------------- hook helpers ----------------------------
     def set_point_hook(self, func):
-        """Register a callback called on every _send_point during playback."""
+        """Register a callback called on every _send_point during playback.
+
+        Pass None to remove the hook.
+        """
         self._point_hook = func
 
     @staticmethod
@@ -1219,26 +1263,247 @@ class PiperTerminal:
             eff[6] = int(eff[6] * (1 - GRIPPER_TIGHT_COEFFICEINT))
         return eff
 
-    # ------------------------ startup zero helper -----------------------------------
-    def _goto_zero(self, arm, label: str = "ARM") -> None:
-        """Enable *arm* and move it to ZERO_POSE, then switch to hold-mode."""
+    # --------------------------------- record / stop ----------------------------------------------------
+    def cmd_record_v2(self, *args: str):
+        """Start hybrid recording (timed control-points format).
+
+        Usage: record_v2 <name>  OR  r2 <name>
+        After starting, move the robot to a desired pose and confirm each pose
+        by entering:  p <duration_sec>
+        Finish by entering:  s
+        """
+        if self._hybrid_recording:
+            logging.info("Гибридная запись уже идёт ‒ завершите 's'.")
+            return
+        if len(args) == 1:
+            full_name = args[0]
+        elif len(args) == 2:
+            parent, child = args
+            if "__" in child:
+                logging.info("В child_name запрещено '__'.")
+                return
+            full_name = f"{parent}__{child}"
+        else:
+            logging.info("record_v2: требуется 1 или 2 аргумента.")
+            return
+
+        track_file = _track_path(full_name)
+        if track_file.exists():
+            if not self._confirm_overwrite(track_file):
+                return
+
         try:
-            arm.EnableArm(7)
-            time.sleep(0.5)
-            arm.ModeCtrl(ctrl_mode=0x01, move_mode=0x01, move_spd_rate_ctrl=10, is_mit_mode=0x00)
-            time.sleep(0.5)
-            arm.JointCtrl(*ZERO_POSE[:6])
-            arm.GripperCtrl(ZERO_POSE[6], 1000, 0x01, 0)
-            while True:
-                js = arm.GetArmJointMsgs().joint_state
-                curr = [js.joint_1, js.joint_2, js.joint_3, js.joint_4, js.joint_5, js.joint_6]
-                if max(abs(a - b) for a, b in zip(curr, ZERO_POSE[:6])) <= 50:
-                    break
-                time.sleep(0.1)
-            arm.ModeCtrl(ctrl_mode=0x01, move_mode=0x00)
-            logging.info(f"[INIT] {label} moved to ZERO pose and holding.")
+            arm = self._arm_from_name(full_name)
         except Exception as exc:
-            logging.warning(f"[INIT] Failed to move {label} to ZERO pose: {exc}")
+            logging.error(f"[HYB-REC] {exc}")
+            return
+
+        # Put the arm into drag-teach mode so the user can manually move it
+        logging.info("MotionCtrl_1: grag_teach_ctrl=0x01   (start hybrid recording)")
+        arm.MotionCtrl_1(grag_teach_ctrl=0x01)
+
+        # Prepare internal buffers
+        self._hybrid_recording = True
+        self._hybrid_track_name = full_name
+        self._hybrid_points = []
+        self._hybrid_durations = []
+        self._hybrid_arm = arm
+
+        logging.info(
+            f"[HYB-REC] {full_name} – перемещайте руку, 'p <duration>' для подтверждения точки, 's' для стоп."
+        )
+
+    # Alias
+    def cmd_r2(self, *args: str):
+        """Alias for record_v2."""
+        self.cmd_record_v2(*args)
+
+    # -------------------------- hybrid point confirm override --------------------------
+    def _hybrid_add_point(self, duration_str: str):
+        if not self._hybrid_recording:
+            logging.error("[HYB-REC] Не запущена запись v2 (используйте r2).")
+            return
+        try:
+            duration = float(duration_str)
+            if duration < 0:
+                raise ValueError
+        except ValueError:
+            logging.error("[HYB-REC] duration должен быть неотрицательным числом (секунды).")
+            return
+
+        # Capture current pose
+        pt = self._current_point(self._hybrid_arm)
+        self._hybrid_points.append(pt)
+        self._hybrid_durations.append(duration)
+        logging.info(
+            f"[HYB-REC] Точка #{len(self._hybrid_points)} записана, duration={duration}s, pt={pt}"
+        )
+
+    # Overridden alias 'p' ‒ behaves differently in hybrid-recording mode
+    def cmd_p(self, *args: str):
+        """Alias that acts as play OR add-point depending on context."""
+        if self._hybrid_recording:
+            if len(args) != 1:
+                logging.info("[HYB-REC] требуется ровно 1 аргумент – duration в секундах.")
+                return
+            self._hybrid_add_point(args[0])
+        else:
+            self.cmd_play(*args)
+
+    # -------------------------- modified stop --------------------------
+    def cmd_s(self):
+        # ---------------- existing behaviour ----------------
+        if not (self._rec_thread and self._rec_thread.is_alive()):
+            logging.info("Ничего не записывается.")
+            return
+        self._rec_stop.set()
+        self._rec_thread.join()
+        logging.info("✓ Запись остановлена.")
+
+    # --------------------------------- play_v2 ---------------------------------------------------------
+    def cmd_play_v2(self, *tracks: str):
+        """Play hybrid timed tracks.
+
+        Usage: play_v2 <t1> [t2 ...]  OR  p2 <t1> [t2 ...]
+        """
+        if not tracks:
+            logging.info("play_v2: требуется >=1 трек")
+            return
+        self._play_stop.clear()
+        self._play_thread = threading.current_thread()
+
+        # Safety pre-checks (reuse existing helpers)
+        arm0 = self._arm_from_name(tracks[0])
+        arm0_can = self._arm_can_from_name(tracks[0])
+        res = self._maybe_reset_from_safe_pose_and_move_to_0(arm0, arm0_can)
+        if not res.ok:
+            logging.error(f"[PLAY_V2] Предусловия безопасности не выполнены: {res.error}")
+            return
+
+        # Move to first control point if needed
+        first_pts_obj = TrackBase.read_track(tracks[0])
+        if not isinstance(first_pts_obj, TrackV3Timed):
+            logging.error("[PLAY_V2] Файл не является треком v3 (timed).")
+            return
+        first_pt = first_pts_obj.points[0]
+        if not self._is_close_ignored(self._current_point(arm0), first_pt):
+            logging.info("[PLAY_V2] Перемещаю робот в начальную точку…")
+            if not self._safe_move_smooth(arm0, first_pt):
+                logging.error("[PLAY_V2] Движение к стартовой точке отменено (небезопасно).")
+                return
+            time.sleep(0.2)
+
+        for i, full_name in enumerate(tracks):
+            if self._play_stop.is_set():
+                logging.info("[PLAY_V2] Стоп запрошен – прерываем воспроизведение после трека.")
+                break
+
+            trk_obj = TrackBase.read_track(full_name)
+            if not isinstance(trk_obj, TrackV3Timed):
+                logging.error(f"[PLAY_V2] '{full_name}' не является треком v3 – пропускаю.")
+                continue
+            arm = self._arm_from_name(full_name)
+            logging.info(f"[PLAY_V2] {full_name} ({len(trk_obj.points)} pts)…")
+            self._run_timed_track(arm, trk_obj)
+
+            if self._play_stop.is_set():
+                logging.info("[PLAY_V2] Стоп запрошен – останавливаем дальнейшие треки.")
+                break
+            if i < len(tracks) - 1:
+                logging.info(f"…пауза {DELAY_BETWEEN_TRACKS} c…")
+                for _ in range(DELAY_BETWEEN_TRACKS * 10):
+                    if self._play_stop.is_set():
+                        break
+                    time.sleep(0.1)
+                if self._play_stop.is_set():
+                    logging.info("[PLAY_V2] Стоп запрошен во время паузы – прерываем.")
+                    break
+
+        logging.info("✓ Воспроизведение v2 завершено.")
+        self._play_thread = None
+        self._play_stop.set()
+
+    # Alias
+    def cmd_p2(self, *args: str):
+        """Alias for play_v2."""
+        self.cmd_play_v2(*args)
+
+    # ---------------------- timed track low-level ----------------------
+    def _run_timed_track(self, arm, trk_obj: TrackV3Timed, hz: int = 50):
+        points = trk_obj.points
+        durations = trk_obj.durations
+        if len(points) < 2:
+            logging.warning("[PLAY_V2] Трек содержит <2 точек – нечего воспроизводить.")
+            return
+
+        self._prepare_track_play(arm)
+        period = 1.0 / hz
+
+        for idx in range(1, len(points)):
+            start_pt = points[idx - 1]
+            end_pt = points[idx]
+            dur = float(durations[idx])  # duration associated with this target
+            steps = max(1, int(dur * hz))
+            diffs = [(e - s) / steps for s, e in zip(start_pt, end_pt)]
+
+            for step in range(1, steps + 1):
+                pt = [int(start_pt[i] + diffs[i] * step) for i in range(7)]
+                self._send_point(arm, pt)
+                if self._play_stop.is_set():
+                    logging.info("[PLAY_V2] Стоп запрошен – прерываю текущий сегмент.")
+                    break
+                time.sleep(period)
+            if self._play_stop.is_set():
+                break
+
+        arm.ModeCtrl(ctrl_mode=0x00, move_mode=0x00)
+        if self._play_stop.is_set():
+            logging.info("[PLAY_V2] Трек остановлен досрочно.")
+        logging.info("ModeCtrl: ctrl_mode=0x00, move_mode=0x00   (end track v2)")
+
+    def _stop_hybrid_recording(self):
+        """Finalize ongoing hybrid recording and reset state."""
+        if not self._hybrid_recording:
+            return
+        assert self._hybrid_track_name is not None
+        self._finalize_record(self._hybrid_arm)
+        TrackV3Timed.write_from_points(  # type: ignore[arg-type]
+            self._hybrid_track_name,
+            self._hybrid_points,
+            self._hybrid_durations,
+        )
+        logging.info(
+            f"[HYB-REC] Сохранено {len(self._hybrid_points)} точек -> {_track_path(self._hybrid_track_name)}."
+        )
+        self._hybrid_recording = False
+        self._hybrid_track_name = None
+        self._hybrid_points.clear()
+        self._hybrid_durations.clear()
+        self._hybrid_arm = None
+        logging.info("✓ Гибридная запись остановлена.")
+
+    def _handle_hybrid_input(self, raw: str) -> bool:
+        """Process input line during hybrid recording.
+
+        Returns True if the line was handled.
+        Allowed inputs:
+            <float>   – duration for new point
+            s|stop    – finish recording
+        """
+        stripped = raw.strip().lower()
+        if stripped in {"s", "stop"}:
+            self._stop_hybrid_recording()
+            return True
+
+        # single-token numeric duration
+        if len(stripped.split()) == 1:
+            try:
+                float(stripped)
+            except ValueError:
+                return False
+            self._hybrid_add_point(stripped)
+            return True
+        return False
 
 
 # -------------------------------------------------------------------- MAIN
