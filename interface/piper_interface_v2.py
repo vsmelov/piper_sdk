@@ -2306,7 +2306,8 @@ class C_PiperInterface_V2():
         最后使用 EndPoseCtrl 确定中点,piper.MoveCAxisUpdateCtrl(0x03)
         '''
         '''
-        MoveC Mode Coordinate Point Update Command.Before sending, switch the robotic arm mode to MoveC control mode
+        MoveC Mode Coordinate Point Update Command.
+        Before sending, switch the robotic arm mode to MoveC control mode
         
         Args:
             instruction_num (int): Instruction point sequence number
