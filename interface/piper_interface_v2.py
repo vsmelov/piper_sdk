@@ -23,8 +23,6 @@ from piper_param import *
 from version import PiperSDKVersion
 from interface.interface_version import InterfaceVersion
 
-from demo.V2.settings import CAN_NAME as DEFAULT_CAN_NAME
-
 class C_PiperInterface_V2():
     '''
     Piper interface class
@@ -51,12 +49,8 @@ class C_PiperInterface_V2():
             self.Hz: float = 0
             self.arm_status = ArmMsgStatus()
         def __str__(self):
-            # return (f"time stamp:{self.time_stamp}\n"
-            #         f"Hz:{self.Hz}\n"
-            #         f"{self.arm_status}\n")
-
-            # xxx vsm: we dont need ts here
-            return (f"Hz:{self.Hz}\n"
+            return (f"time stamp:{self.time_stamp}\n"
+                    f"Hz:{self.Hz}\n"
                     f"{self.arm_status}\n")
 
     class ArmEndPose():
@@ -432,7 +426,7 @@ class C_PiperInterface_V2():
         return cls._instances[key]
 
     def __init__(self,
-                 can_name:str=DEFAULT_CAN_NAME,
+                 can_name:str="can0",
                  judge_flag=True,
                  can_auto_init=True,
                  dh_is_offset: int = 0,
@@ -1134,13 +1128,12 @@ class C_PiperInterface_V2():
                 self.__is_ok = True
     
     def __CalJointSDKLimit(self, joint_value, joint_num:str):
-        # if(self.__start_sdk_joint_limit):
-        #     j_min, j_max = self.GetSDKJointLimitParam(joint_num)
-        #     j_min = round(math.degrees(j_min) * 1000)
-        #     j_max = round(math.degrees(j_max) * 1000)
-        #     return max(j_min, min(joint_value, j_max))
-        # else:
-        return joint_value
+        if(self.__start_sdk_joint_limit):
+            j_min, j_max = self.GetSDKJointLimitParam(joint_num)
+            j_min = round(math.degrees(j_min) * 1000)
+            j_max = round(math.degrees(j_max) * 1000)
+            return max(j_min, min(joint_value, j_max))
+        else: return joint_value
 
     def __CalGripperSDKLimit(self, gripper_val:int):
         if self.__start_sdk_gripper_limit:
@@ -2306,8 +2299,7 @@ class C_PiperInterface_V2():
         最后使用 EndPoseCtrl 确定中点,piper.MoveCAxisUpdateCtrl(0x03)
         '''
         '''
-        MoveC Mode Coordinate Point Update Command.
-        Before sending, switch the robotic arm mode to MoveC control mode
+        MoveC Mode Coordinate Point Update Command.Before sending, switch the robotic arm mode to MoveC control mode
         
         Args:
             instruction_num (int): Instruction point sequence number
@@ -2695,17 +2687,8 @@ class C_PiperInterface_V2():
             clear_joint_err: Command to clear joint error codes, with a valid value of 0xAE.
         '''
         tx_can = Message()
-        joint_config = ArmMsgJointConfig(
-            joint_num,
-            set_zero,
-            acc_param_is_effective,
-            max_joint_acc,
-            clear_err,
-        )
-        msg = PiperMessage(
-            type_=ArmMsgType.PiperMsgJointConfig,
-            arm_joint_config=joint_config,
-        )
+        joint_config = ArmMsgJointConfig(joint_num, set_zero, acc_param_is_effective, max_joint_acc, clear_err)
+        msg = PiperMessage(type_=ArmMsgType.PiperMsgJointConfig,arm_joint_config=joint_config)
         self.__parser.EncodeMessage(msg, tx_can)
         self.__arm_can.SendCanMessage(tx_can.arbitration_id, tx_can.data)
     

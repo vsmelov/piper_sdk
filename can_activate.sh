@@ -27,30 +27,56 @@ fi
 
 echo "Both ethtool and can-utils are installed."
 
-# Retrieve the number of CAN modules in the current system.
-CURRENT_CAN_COUNT=$(ip link show type can | grep -c "link/can")
+read_interfaces() {
+    ip -br link show type can | awk '{print $1}'
+}
 
-# Verify if the number of CAN modules in the current system matches the expected value.
-if [ "$CURRENT_CAN_COUNT" -ne "1" ]; then
-    if [ -z "$USB_ADDRESS" ]; then
-        # Iterate through all CAN interfaces.
-        for iface in $(ip -br link show type can | awk '{print $1}'); do
-            # Use ethtool to retrieve bus-info.
-            BUS_INFO=$(sudo ethtool -i "$iface" | grep "bus-info" | awk '{print $2}')
-            
-            if [ -z "$BUS_INFO" ];then
-                echo "Error: Unable to retrieve bus-info for interface $iface."
-                continue
-            fi
-            
-            echo "Interface $iface is inserted into USB port $BUS_INFO"
-        done
-        echo -e " \e[31m Error: The number of CAN modules detected by the system ($CURRENT_CAN_COUNT) does not match the expected number (1). \e[0m"
-        echo -e " \e[31m Please add the USB hardware address parameter, such as: \e[0m"
-        echo -e " bash can_activate.sh can0 1000000 1-2:1.0"
-        echo "-------------------ERROR-----------------------"
-        exit 1
+# Wait up to 5 seconds for all CAN adapters to appear (important when plugging through hub)
+CAN_IFACES=( $(read_interfaces) )
+if [ ${#CAN_IFACES[@]} -lt 2 ]; then
+    for _ in {1..5}; do
+        sleep 1
+        NEW_IFACES=( $(read_interfaces) )
+        if [ ${#NEW_IFACES[@]} -gt ${#CAN_IFACES[@]} ]; then
+            CAN_IFACES=( "${NEW_IFACES[@]}" )
+        fi
+    done
+fi
+
+if [ ${#CAN_IFACES[@]} -eq 0 ]; then
+    echo "\e[31mError: No CAN interfaces detected. Is the gs_usb/slcan driver loaded?\e[0m"
+    exit 1
+fi
+
+echo "Detected CAN interfaces: ${CAN_IFACES[*]}"
+
+# Desired target names in order
+TARGET_NAMES=(can0 can1 can2 can3)
+
+# Iterate and configure each detected interface
+idx=0
+for iface in "${CAN_IFACES[@]}"; do
+    tgt=${TARGET_NAMES[$idx]}
+    echo "Configuring $iface -> $tgt (bitrate $DEFAULT_BITRATE)"
+    sudo ip link set "$iface" down || true
+    sudo ip link set "$iface" type can bitrate $DEFAULT_BITRATE || true
+    # Rename if different
+    if [ "$iface" != "$tgt" ]; then
+        sudo ip link set "$iface" name "$tgt" || true
+        iface="$tgt"
     fi
+    sudo ip link set "$iface" up || true
+    idx=$((idx+1))
+done
+
+# Summary
+echo "Configured ${#CAN_IFACES[@]} CAN interface(s) at $DEFAULT_BITRATE bit/s:"
+ip -br link show type can
+
+# If user didn't specify USB_ADDRESS (multi-interface auto mode), script is done.
+if [ -z "$USB_ADDRESS" ]; then
+    echo "-------------------OVER------------------------"
+    exit 0
 fi
 
 # Load the gs_usb module.
@@ -72,7 +98,7 @@ if [ -n "$USB_ADDRESS" ]; then
             break
         fi
     done
-    и
+
     if [ -z "$INTERFACE_NAME" ]; then
         echo "Error: Unable to find CAN interface corresponding to USB hardware address $USB_ADDRESS."
         exit 1
