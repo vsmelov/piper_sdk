@@ -87,17 +87,37 @@ class PiperGUI:
         btn_frame = tk.Frame(root)
         btn_frame.pack(pady=5, fill=tk.X)
 
-        self.play_btn = tk.Button(btn_frame, text="Play", width=10, command=self._play_selected)
-        self.play_btn.pack(side=tk.LEFT, padx=5)
+        # --- Legacy controls ---
+        self.play_btn = tk.Button(btn_frame, text="Play legacy", width=12, command=self._play_selected_legacy)
+        self.play_btn.pack(side=tk.LEFT, padx=4)
 
-        self.record_btn = tk.Button(btn_frame, text="Record…", width=10, command=self._record_new)
-        self.record_btn.pack(side=tk.LEFT, padx=5)
+        self.record_btn = tk.Button(btn_frame, text="Rec legacy", width=12, command=self._record_legacy)
+        self.record_btn.pack(side=tk.LEFT, padx=4)
 
+        # --- Hybrid controls ---
+        self.play_h_btn = tk.Button(btn_frame, text="Play v2", width=12, command=self._play_selected_hybrid)
+        self.play_h_btn.pack(side=tk.LEFT, padx=4)
+
+        self.record_h_btn = tk.Button(btn_frame, text="Rec v2", width=12, command=self._record_hybrid)
+        self.record_h_btn.pack(side=tk.LEFT, padx=4)
+
+        # Point duration preset buttons
+        preset_frame = tk.Frame(root)
+        preset_frame.pack(pady=4)
+        for d in (1, 2, 5, 10):
+            tk.Button(preset_frame, text=f"{d}s", width=4, command=lambda _d=d: self._add_point_preset(_d)).pack(side=tk.LEFT, padx=2)
+
+        # custom duration
+        self.custom_var = tk.StringVar()
+        tk.Entry(preset_frame, width=6, textvariable=self.custom_var).pack(side=tk.LEFT, padx=2)
+        tk.Button(preset_frame, text="Point", width=6, command=self._add_point_custom).pack(side=tk.LEFT, padx=2)
+
+        # Stop buttons
         self.stop_rec_btn = tk.Button(btn_frame, text="Stop Rec", width=10, command=self._stop_record)
-        self.stop_rec_btn.pack(side=tk.LEFT, padx=5)
+        self.stop_rec_btn.pack(side=tk.LEFT, padx=4)
 
         self.stop_play_btn = tk.Button(btn_frame, text="Stop Play", width=10, command=self._stop_play)
-        self.stop_play_btn.pack(side=tk.LEFT, padx=5)
+        self.stop_play_btn.pack(side=tk.LEFT, padx=4)
 
         # Initial population + auto-refresh
         self._refresh_tracks()
@@ -212,6 +232,55 @@ class PiperGUI:
         except Exception as exc:
             logging.exception("Stop play failed")
             messagebox.showerror("Error", str(exc))
+
+    # ---------- New button callbacks ----------
+    def _play_selected_legacy(self):
+        tracks = [self.listbox.get(i) for i in self.listbox.curselection()]
+        if not tracks:
+            messagebox.showinfo("No selection", "Select tracks to play")
+            return
+        threading.Thread(target=lambda: self.term.play_legacy(*tracks), daemon=True).start()
+
+    def _play_selected_hybrid(self):
+        tracks = [self.listbox.get(i) for i in self.listbox.curselection()]
+        if not tracks:
+            messagebox.showinfo("No selection", "Select tracks to play")
+            return
+        threading.Thread(target=lambda: self.term.play_hybrid(*tracks), daemon=True).start()
+
+    def _record_legacy(self):
+        self._record_generic(hybrid=False)
+
+    def _record_hybrid(self):
+        self._record_generic(hybrid=True)
+
+    def _record_generic(self, hybrid: bool):
+        prompt = "Enter new hybrid track name" if hybrid else "Enter new track name"
+        name = simpledialog.askstring("Record", prompt, parent=self.root)
+        if not name:
+            return
+        try:
+            if hybrid:
+                self.term.start_hybrid_record(name)
+            else:
+                self.term.start_legacy_record(name)
+        except Exception as exc:
+            messagebox.showerror("Error", str(exc))
+
+    # Point buttons --------------------------------------------------
+    def _add_point_preset(self, duration: float):
+        try:
+            self.term.add_hybrid_point(float(duration))
+        except Exception as exc:
+            logging.warning("Add point failed: %s", exc)
+
+    def _add_point_custom(self):
+        try:
+            dur = float(self.custom_var.get())
+        except ValueError:
+            messagebox.showwarning("Bad value", "Enter numeric duration")
+            return
+        self._add_point_preset(dur)
 
     # ---------------------------- visualiser ----------------------------
     def _on_new_point(self, pt):
