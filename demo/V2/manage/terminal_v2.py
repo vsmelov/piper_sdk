@@ -151,6 +151,8 @@ class PiperTerminal:
 
     # Track implementation to use by default (can be overridden in subclasses)
     track_cls = TrackV2
+    # Default duration (seconds) for a control point when no duration is specified
+    DEFAULT_POINT_DURATION_SEC = 1.0
 
     def __init__(self) -> None:
         # Инициализируем каждую руку отдельно и не падаем, если одна из них недоступна.
@@ -209,6 +211,10 @@ class PiperTerminal:
         self._hybrid_points: List[List[int]] = []
         self._hybrid_durations: List[float] = []
         self._hybrid_arm = None  # type: Optional[object]
+
+        # Current default duration (seconds) for new control points in hybrid recording.
+        # Can be changed at runtime with the "default <sec>" command.
+        self._default_point_duration: float = self.DEFAULT_POINT_DURATION_SEC
 
     def __dangerous_reset(self, arm, can_name):
         # это код полное говно, но работает
@@ -1319,7 +1325,7 @@ class PiperTerminal:
         self.cmd_record_v2(*args)
 
     # -------------------------- hybrid point confirm override --------------------------
-    def _hybrid_add_point(self, duration_str: str):
+    def _hybrid_add_point(self, duration_str: str | float | int):
         if not self._hybrid_recording:
             logging.error("[HYB-REC] Не запущена запись v2 (используйте r2).")
             return
@@ -1343,10 +1349,14 @@ class PiperTerminal:
     def cmd_p(self, *args: str):
         """Alias that acts as play OR add-point depending on context."""
         if self._hybrid_recording:
-            if len(args) != 1:
-                logging.info("[HYB-REC] требуется ровно 1 аргумент – duration в секундах.")
+            # If no duration is provided – use the default value
+            if len(args) == 0:
+                self._hybrid_add_point(str(self._default_point_duration))
+            elif len(args) == 1:
+                self._hybrid_add_point(args[0])
+            else:
+                logging.info("[HYB-REC] требуется максимум 1 аргумент – duration в секундах.")
                 return
-            self._hybrid_add_point(args[0])
         else:
             self.cmd_play(*args)
 
@@ -1491,6 +1501,27 @@ class PiperTerminal:
             s|stop    – finish recording
         """
         stripped = raw.strip().lower()
+
+        # Empty input (just Enter) – add point with current default duration
+        if stripped == "":
+            self._hybrid_add_point(str(self._default_point_duration))
+            return True
+
+        # Change the default duration: "default <sec>" command
+        tokens = stripped.split()
+        if tokens[0] == "default" and len(tokens) == 2:
+            try:
+                new_def = float(tokens[1])
+                if new_def < 0:
+                    raise ValueError
+            except ValueError:
+                logging.error("[HYB-REC] 'default' требует неотрицательное число секунд.")
+                return True  # handled (even if invalid)
+
+            self._default_point_duration = new_def
+            logging.info(f"[HYB-REC] Новое дефолтное duration = {new_def}s")
+            return True
+
         if stripped in {"s", "stop"}:
             self._stop_hybrid_recording()
             return True
