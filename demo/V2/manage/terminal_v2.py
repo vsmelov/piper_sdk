@@ -8,6 +8,8 @@ from typing import Dict, List, Optional, Callable, Tuple
 import math
 from dataclasses import dataclass
 
+from demo.V2.manage.scene import SceneElement, Scene
+
 # История ввода (POSIX)
 try:
     import readline  # noqa: F401 – side-effect import
@@ -61,6 +63,12 @@ GRIPPER_EFFORT = 4000
 # DANGEROUS constant: how much the gripper will additionally squeeze during playback.
 # Value is a fraction; resulting gripper angle is reduced by this coefficient (tightening).
 GRIPPER_TIGHT_COEFFICEINT = 0.01  # ⚠️ changing this may break grasp reliability
+
+# ---------------- Timing configuration ----------------
+# Default control frequency (Hz) and phase shift to de-synchronize two arms.
+DEFAULT_HZ = 40
+# Half-period shift so USB traffic не совпадает во времени.
+PHASE_SHIFT_SEC = 1.0 / DEFAULT_HZ / 2  # 12.5 ms при 40 Гц
 
 # Заводская нулевая поза (6 суставов + захват) в единицах SDK (0.001° / 0.001 мм)
 ZERO_POSE: List[int] = [0, 0, 0, 0, 0, 0, 0]
@@ -300,28 +308,29 @@ class PiperTerminal:
         return ans == "y"
 
     # --------------------------------- motion helpers ---------------------------------------------------
-    def _move_smooth(self, arm, target_pt, steps: int = 100, hz: int = 50) -> PiperResponse:
-        """Плавно ведёт руку к target_pt за ~steps/hz секунд."""
+    def _move_smooth(self, arm, target_pt, steps: int = 20, hz: int = DEFAULT_HZ) -> PiperResponse:
+        """Плавно ведёт руку к *target_pt* за *steps* кадров.
+
+        • Отправляем лишь 20 промежуточных точек (по умолч.) – этого достаточно
+          для визуальной плавности, но в 5 раз меньше трафика, чем раньше.
+        • Выполняется ~ steps / hz секунды (≈0.5 c при 20×40 Гц).
+        """
+
         curr = self._current_point(arm)
         diffs = [(t - c) / steps for c, t in zip(curr, target_pt)]
         period = 1.0 / hz
 
-        logging.info(f'[SEND] sending points started')
-        for i in range(steps):
+        for i in range(1, steps + 1):
             pt = [int(c + d * i) for c, d in zip(curr, diffs)]
             self._send_point(arm, pt)
-            time.sleep(period)  # todo: too aggressive
-        logging.info(f'[SEND] sending points finished')
+            if self._play_stop.is_set():
+                return PiperResponse(ok=False, error="stopped")
+            time.sleep(period)
 
-        if not self._is_close_strict(self._current_point(arm), target_pt):
-            return PiperResponse(
-                ok=False,
-                error='not close to target_pt',
-            )
-
-        return PiperResponse(
-            ok=True,
-        )
+        # финальная проверка
+        if self._is_close_strict(self._current_point(arm), target_pt):
+            return PiperResponse(ok=True)
+        return PiperResponse(ok=False, error="not converged")
 
     # --------------------------------- Zero safety helpers ---------------------------------------------
     def _maybe_reset_from_safe_pose_and_move_to_0(self, arm, can_name) -> PiperResponse:
@@ -601,7 +610,7 @@ class PiperTerminal:
         self._rec_thread.start()
 
     # --------------------------------- workers ----------------------------------------------------------
-    def _rec_worker(self, arm, full_name: str, hz: int = 50):
+    def _rec_worker(self, arm, full_name: str, hz: int = 40):
         """Работник записи обычного трека."""
         period = 1.0 / hz
         logging.info("MotionCtrl_1: grag_teach_ctrl=0x01   (start recording)")
@@ -748,7 +757,7 @@ class PiperTerminal:
                 f"[REC] Сохранено {len(data)} точек -> {_track_path(full_name)}."
             )
 
-    def _rec_worker_safe(self, arm, safe_name: str, hz: int = 50):
+    def _rec_worker_safe(self, arm, safe_name: str, hz: int = 40):
         """Работник записи безопасного Zero-трека."""
         period = 1.0 / hz
         logging.info("MotionCtrl_1: grag_teach_ctrl=0x01   (start recording SAFE)")
@@ -890,30 +899,41 @@ class PiperTerminal:
             logging.error("[PP] Нужен один трек для левой и один для правой руки – проверьте порядок аргументов.")
             return
 
-        # Предполетные проверки: сбросы и движение в 0 позу для каждой руки (по очереди)
-        for full_name in tracks:
-            arm = self._arm_from_name(full_name)
-            can_name = self._arm_can_from_name(full_name)
-            result = self._maybe_reset_from_safe_pose_and_move_to_0(arm, can_name)
-            if not result.ok:
-                logging.error(f"[PP] Предусловия безопасности не выполнены для {full_name}: {result.error}")
-                return
+        # Доводим обе руки до стартовых точек параллельно
+        def _move_to_start(full_name: str):
+            arm_local = self._arm_from_name(full_name)
+            first_pt_local = self._load(full_name)[0]
+            if self._is_close_ignored(self._current_point(arm_local), first_pt_local):
+                return True
+            logging.info(
+                f"[PP] Перемещаю {'левую' if arm_local is self.left_arm else 'правую'} руку в начало трека…"
+            )
+            return self._safe_move_smooth(arm_local, first_pt_local)
 
-        # При необходимости доводим каждую руку до стартовой точки
+        left_ok = right_ok = True
+        t_left_start = threading.Thread(target=lambda: None)
+        t_right_start = threading.Thread(target=lambda: None)
+
+        # create threads
         for full_name in tracks:
-            arm = self._arm_from_name(full_name)
-            first_pt = self._load(full_name)[0]
-            if not self._is_close_ignored(self._current_point(arm), first_pt):
-                logging.info(
-                    f"[PP] Перемещаю {'левую' if arm is self.left_arm else 'правую'} руку в начало трека…"
-                )
-                if not self._safe_move_smooth(arm, first_pt):
-                    logging.error("[PP] Движение к стартовой точке отменено (небезопасно).")
-                    return
-                time.sleep(0.2)
+            if full_name.startswith("left__"):
+                t_left_start = threading.Thread(target=lambda fn=full_name: globals().update(left_ok=_move_to_start(fn)), daemon=True)
+            else:
+                t_right_start = threading.Thread(target=lambda fn=full_name: globals().update(right_ok=_move_to_start(fn)), daemon=True)
+
+        t_left_start.start()
+        t_right_start.start()
+        t_left_start.join()
+        t_right_start.join()
+
+        if not (left_ok and right_ok):
+            logging.error("[PP] Движение к стартовой точке не удалось на одной из рук.")
+            return
 
         # Внутренний воркер для исполнения одного трека
-        def _play_worker(full_name: str):
+        def _play_worker(full_name: str, delay: float = 0.0):
+            if delay > 0:
+                time.sleep(delay)
             data = self._load(full_name)
             details = self._load_details(full_name)
             arm = self._arm_from_name(full_name)
@@ -921,8 +941,8 @@ class PiperTerminal:
             self._run_track(arm, data, details)
 
         # Запускаем оба воспроизведения параллельно
-        t_left = threading.Thread(target=_play_worker, args=(left_track,), daemon=True)
-        t_right = threading.Thread(target=_play_worker, args=(right_track,), daemon=True)
+        t_left = threading.Thread(target=_play_worker, args=(left_track, 0.0), daemon=True)
+        t_right = threading.Thread(target=_play_worker, args=(right_track, PHASE_SHIFT_SEC), daemon=True)
         t_left.start()
         t_right.start()
         t_left.join()
@@ -968,7 +988,7 @@ class PiperTerminal:
         arm.ModeCtrl(ctrl_mode=0x01, move_mode=0x01, move_spd_rate_ctrl=50)
         time.sleep(0.02)
 
-    def _run_track(self, arm, data: List[TrackPoint], details=None, hz: int = 50):
+    def _run_track(self, arm, data: List[TrackPoint], details=None, hz: int = 40):
         """Play the given trajectory with accuracy gating.
 
         The next point will not be issued until the arm is within 0.2° (≈200 units)
@@ -1419,15 +1439,6 @@ class PiperTerminal:
             if self._play_stop.is_set():
                 logging.info("[PLAY_V2] Стоп запрошен – останавливаем дальнейшие треки.")
                 break
-            if i < len(tracks) - 1:
-                logging.info(f"…пауза {DELAY_BETWEEN_TRACKS} c…")
-                for _ in range(DELAY_BETWEEN_TRACKS * 10):
-                    if self._play_stop.is_set():
-                        break
-                    time.sleep(0.1)
-                if self._play_stop.is_set():
-                    logging.info("[PLAY_V2] Стоп запрошен во время паузы – прерываем.")
-                    break
 
         logging.info("✓ Воспроизведение v2 завершено.")
         self._play_thread = None
@@ -1439,7 +1450,7 @@ class PiperTerminal:
         self.cmd_play_v2(*args)
 
     # ---------------------- timed track low-level ----------------------
-    def _run_timed_track(self, arm, trk_obj: TrackV3Timed, hz: int = 50):
+    def _run_timed_track(self, arm, trk_obj: TrackV3Timed, hz: int = 40):
         points = trk_obj.points
         durations = trk_obj.durations
         if len(points) < 2:
@@ -1535,6 +1546,161 @@ class PiperTerminal:
             self._hybrid_add_point(stripped)
             return True
         return False
+
+
+    # --------------------------- Public high-level API ---------------------------
+    # Legacy recording / playing -----------------
+    def start_legacy_record(self, name: str):
+        """Begin legacy (point-dense) recording of *name* (same as cmd_record)."""
+        self.cmd_record(name)
+
+    def play_legacy(self, *tracks: str):
+        """Play legacy tracks sequentially (blocking)."""
+        self.cmd_play(*tracks)
+
+    # Hybrid v2 recording / playing --------------
+    def start_hybrid_record(self, name: str):
+        """Begin hybrid recording (control points)."""
+        self.cmd_record_v2(name)
+
+    def add_hybrid_point(self, duration: float):
+        """Add new control point with *duration* seconds."""
+        self._hybrid_add_point(str(duration))
+
+    def stop_hybrid_record(self):
+        """Finish current hybrid recording (if any)."""
+        self._stop_hybrid_recording()
+
+    def play_hybrid(self, *tracks: str):
+        """Play hybrid timed tracks (blocking)."""
+        self.cmd_play_v2(*tracks)
+
+    def is_hybrid_recording(self) -> bool:
+        return self._hybrid_recording
+
+    # --------------------------- Scene helpers ---------------------------
+    def _track_duration(self, name: str) -> float | None:
+        """Return approximate duration of track in seconds if known."""
+        try:
+            obj = TrackBase.read_track(name)
+        except Exception:
+            return None
+        if isinstance(obj, TrackV3Timed):
+            return sum(obj.durations)
+        # legacy – use timestamp diff if available
+        if obj.track_points:
+            first = obj.track_points[0]
+            last = obj.track_points[-1]
+            return max(0.0, last.coordinates_timestamp - first.coordinates_timestamp)
+        return None
+
+    # --------------------------- Scene commands ---------------------------
+    def cmd_scene_add(self, scene_name: str):
+        if not scene_name.startswith("scene__"):
+            logging.error("Scene name must start with 'scene__'")
+            return
+        logging.info("[SCENE ADD] building LEFT arm timeline – type 'done' to finish")
+        left: list[SceneElement] = []
+        right: list[SceneElement] = []
+
+        def _collect(arm_name: str):
+            out: list[SceneElement] = []
+            while True:
+                line = input(f"{arm_name}> ").strip()
+                if line == "done":
+                    break
+                parts = line.split()
+                if not parts:
+                    continue
+                if parts[0] == "track" and len(parts) == 2:
+                    out.append(SceneElement(type="track", name=parts[1]))
+                elif parts[0] == "pause" and len(parts) == 2:
+                    try:
+                        dur = float(parts[1])
+                        out.append(SceneElement(type="pause", duration=dur))
+                    except ValueError:
+                        logging.warning("bad duration")
+                else:
+                    logging.warning("unknown input; use 'track <name>' or 'pause <sec>' or 'done'")
+            return out
+
+        left = _collect("LEFT")
+        logging.info("[SCENE ADD] building RIGHT arm timeline – type 'done' to finish")
+        right = _collect("RIGHT")
+
+        scene = Scene(name=scene_name, left=left, right=right)
+        scene.save()
+        logging.info(f"Scene saved → {scene.path}")
+
+    def cmd_scene_show(self, scene_name: str):
+        try:
+            scene = Scene.load(scene_name)
+        except Exception as exc:
+            logging.error(f"Failed: {exc}")
+            return
+        tl: dict[str, list[tuple[SceneElement, float, float | None]]] = scene.timeline_with_times()  # type: ignore[assignment]
+        for arm in ("left", "right"):
+            logging.info(f"--- {arm.upper()} ---")
+            t_cursor = 0.0
+            for el in tl[arm]:
+                item, start, _end = el
+                if item.type == "pause":
+                    dur = item.duration or 0
+                    logging.info(f"pause {dur}s  (t={start:.2f}→{start+dur:.2f})")
+                    t_cursor += dur
+                else:
+                    if item.name is None:
+                        logging.warning("scene element missing track name")
+                        continue
+                    dur = self._track_duration(item.name) or 0
+                    logging.info(f"track {item.name}  ({dur:.2f}s) (t={start:.2f}→{start+dur:.2f})")
+                    t_cursor += dur
+
+    def cmd_scene_play(self, scene_name: str):
+        try:
+            scene = Scene.load(scene_name)
+        except Exception as exc:
+            logging.error(f"Failed to load scene: {exc}")
+            return
+
+        self._play_stop.clear()
+
+        # Internal worker for one arm timeline
+        def _worker(seq: list[SceneElement], arm_label: str):
+            if not seq:
+                return
+            # Determine arm CAN name via first track name or via label
+            first_track_el = next((e for e in seq if e.type == "track"), None)
+            if first_track_el is None:
+                return
+            arm = self._arm_from_name(first_track_el.name)  # type: ignore[arg-type]
+            can_name = self._arm_can_from_name(first_track_el.name)  # type: ignore[arg-type]
+
+            # safety reset once before start
+            self._maybe_reset_from_safe_pose_and_move_to_0(arm, can_name)
+
+            for el in seq:
+                if self._play_stop.is_set():
+                    break
+                if el.type == "pause":
+                    time.sleep(el.duration or 0)
+                    continue
+                # track element
+                track_obj = TrackBase.read_track(el.name)  # type: ignore[arg-type]
+                if isinstance(track_obj, TrackV3Timed):
+                    self._run_timed_track(arm, track_obj)
+                else:
+                    data = track_obj.track_points
+                    self._run_track(arm, data)
+
+        left_thread = threading.Thread(target=_worker, args=(scene.left, "left"), daemon=True)
+        right_thread = threading.Thread(target=_worker, args=(scene.right, "right"), daemon=True)
+        left_thread.start()
+        right_thread.start()
+        left_thread.join()
+        right_thread.join()
+        self._play_stop.set()
+
 
 
 # -------------------------------------------------------------------- MAIN
