@@ -1143,12 +1143,13 @@ class C_PiperInterface_V2():
         return joint_value
 
     def __CalGripperSDKLimit(self, gripper_val:int):
-        if self.__start_sdk_gripper_limit:
-            g_min, g_max = self.GetSDKGripperRangeParam()
-            g_min = round(g_min *1000 * 1000)
-            g_max = round(g_max *1000 * 1000)
-            return max(g_min, min(gripper_val, g_max))
-        else: return gripper_val
+        # if self.__start_sdk_gripper_limit:
+        #     g_min, g_max = self.GetSDKGripperRangeParam()
+        #     g_min = round(g_min *1000 * 1000)
+        #     g_max = round(g_max *1000 * 1000)
+        #     return max(g_min, min(gripper_val, g_max))
+        # else:
+        return gripper_val
 
     def __UpdateArmStatus(self, msg:PiperMessage):
         '''更新机械臂状态
