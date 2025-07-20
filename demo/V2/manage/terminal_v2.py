@@ -153,43 +153,43 @@ class PiperTerminal:
     # Track implementation to use by default (can be overridden in subclasses)
     track_cls = TrackV2
 
-    def __init__(self) -> None:
+    def __init__(self, left_can: Optional[str] = CAN_LEFT, right_can: Optional[str] = CAN_RIGHT) -> None:
         # Инициализируем каждую руку отдельно и не падаем, если одна из них недоступна.
 
         # Левая рука ------------------------------------------------------------------
         try:
-            if CAN_LEFT is not None:
-                _left_candidate = SDK.get_instance(CAN_LEFT)
+            if left_can is not None:
+                _left_candidate = SDK.get_instance(left_can)
                 try:
                     _left_candidate.ConnectPort()
                     self.left_arm = _left_candidate
-                    logging.info(f"LEFT ({CAN_LEFT}) port connected.")
+                    logging.info(f"LEFT ({left_can}) port connected.")
                 except Exception as exc:
-                    logging.warning(f"LEFT ({CAN_LEFT}) connection failed: {exc}")
+                    logging.warning(f"LEFT ({left_can}) connection failed: {exc}")
                     self.left_arm = None
             else:
-                logging.info("LEFT arm disabled in settings (CAN_LEFT is None)")
+                logging.info("LEFT arm disabled (left_can is None)")
                 self.left_arm = None
         except Exception as exc:
-            logging.warning(f"LEFT ({CAN_LEFT}) initialisation failed: {exc}")
+            logging.warning(f"LEFT ({left_can}) initialisation failed: {exc}")
             self.left_arm = None
 
         # Правая рука ----------------------------------------------------------------
         try:
-            if CAN_RIGHT is not None:
-                _right_candidate = SDK.get_instance(CAN_RIGHT)  # type: ignore[arg-type]
+            if right_can is not None:
+                _right_candidate = SDK.get_instance(right_can)  # type: ignore[arg-type]
                 try:
                     _right_candidate.ConnectPort()
                     self.right_arm = _right_candidate
-                    logging.info(f"RIGHT ({CAN_RIGHT}) port connected.")
+                    logging.info(f"RIGHT ({right_can}) port connected.")
                 except Exception as exc:
-                    logging.warning(f"RIGHT ({CAN_RIGHT}) connection failed: {exc}")
+                    logging.warning(f"RIGHT ({right_can}) connection failed: {exc}")
                     self.right_arm = None
             else:
-                logging.info("RIGHT arm disabled in settings (CAN_RIGHT is None)")
+                logging.info("RIGHT arm disabled (right_can is None)")
                 self.right_arm = None
         except Exception as exc:
-            logging.warning(f"RIGHT ({CAN_RIGHT}) initialisation failed: {exc}")
+            logging.warning(f"RIGHT ({right_can}) initialisation failed: {exc}")
             self.right_arm = None
 
         # Запись
@@ -210,6 +210,10 @@ class PiperTerminal:
         self._hybrid_points: List[List[int]] = []
         self._hybrid_durations: List[float] = []
         self._hybrid_arm = None  # type: Optional[object]
+
+        # Remember CAN names for helper methods
+        self._left_can = left_can
+        self._right_can = right_can
 
     def __dangerous_reset(self, arm, can_name):
         # это код полное говно, но работает
@@ -928,9 +932,9 @@ class PiperTerminal:
     # --------------------------------- low-level helpers -----------------------------------------------
     def _arm_can_from_name(self, full_name: str):
         if full_name.startswith("left__"):
-            return CAN_LEFT
+            return self._left_can
         if full_name.startswith("right__"):
-            return CAN_RIGHT
+            return self._right_can
         raise ValueError("Имя должно начинаться с left__ или right__")
 
     def _arm_from_name(self, full_name: str):
