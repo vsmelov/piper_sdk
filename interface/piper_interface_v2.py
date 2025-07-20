@@ -1140,6 +1140,7 @@ class C_PiperInterface_V2():
         #     j_max = round(math.degrees(j_max) * 1000)
         #     return max(j_min, min(joint_value, j_max))
         # else:
+        # xxx we dont need that
         return joint_value
 
     def __CalGripperSDKLimit(self, gripper_val:int):

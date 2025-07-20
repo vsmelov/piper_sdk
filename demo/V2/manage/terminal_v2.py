@@ -61,7 +61,7 @@ GRIPPER_EFFORT = 4000
 
 # DANGEROUS constant: how much the gripper will additionally squeeze during playback.
 # Value is a fraction; resulting gripper angle is reduced by this coefficient (tightening).
-GRIPPER_TIGHT_COEFFICEINT = 0.01  # ⚠️ changing this may break grasp reliability
+GRIPPER_TIGHT_COEFFICEINT = 0.05  # ⚠️ changing this may break grasp reliability
 
 # Заводская нулевая поза (6 суставов + захват) в единицах SDK (0.001° / 0.001 мм)
 ZERO_POSE: List[int] = [0, 0, 0, 0, 0, 0, 0]
