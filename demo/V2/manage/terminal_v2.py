@@ -153,7 +153,11 @@ class PiperTerminal:
     # Track implementation to use by default (can be overridden in subclasses)
     track_cls = TrackV2
 
-    def __init__(self, left_can: Optional[str] = CAN_LEFT, right_can: Optional[str] = CAN_RIGHT) -> None:
+    def __init__(
+        self, 
+        left_can: Optional[str] = CAN_LEFT, 
+        right_can: Optional[str] = CAN_RIGHT,
+    ) -> None:
         # Инициализируем каждую руку отдельно и не падаем, если одна из них недоступна.
 
         # Левая рука ------------------------------------------------------------------
@@ -1662,6 +1666,112 @@ class PiperTerminal:
         left_thread.join()
         right_thread.join()
         self._play_stop.set()
+
+    # ------------------------------- direct coordinate helpers -------------------------------------------
+    def cmd_get(self, *args: str):
+        """Вывод текущих координат.
+
+        Форматы:
+            get                              – обе руки, все суставы
+            get <joint_idx>                  – обе руки, конкретный сустав
+            get <left|right>                – указанная рука, все суставы
+            get <left|right> <joint_idx>     – указанная рука, конкретный сустав
+        joint_idx: 0-5 суставы, 6 – гриппер
+        Возвращает dict с результатами (для IPC).
+        """
+        # Helper to print for one arm
+        def _print_arm(label: str, arm, idx: int | None):
+            if arm is None:
+                logging.warning("[GET] %s arm not initialised", label)
+                return None
+            pt = self._current_point(arm)
+            if idx is None:
+                logging.info("[GET] %s %s", label, pt)
+                return pt
+            if not 0 <= idx < len(pt):
+                logging.error("[GET] joint_idx вне диапазона 0-6")
+                return None
+            logging.info("[GET] %s joint[%d] = %d", label, idx, pt[idx])
+            return pt[idx]
+
+        arm_arg: str | None = None
+        idx_arg: str | None = None
+        if len(args) == 1:
+            # could be joint_idx OR arm_name
+            if args[0] in {"left", "right"}:
+                arm_arg = args[0]
+            else:
+                idx_arg = args[0]
+        elif len(args) == 2:
+            arm_arg, idx_arg = args  # type: ignore[misc]
+        elif len(args) > 2:
+            logging.info("[GET] неверное число аргументов")
+            return None
+
+        idx: int | None = None
+        if idx_arg is not None:
+            try:
+                idx = int(idx_arg)
+            except ValueError:
+                logging.error("[GET] joint_idx должен быть числом 0-6")
+                return None
+
+        results = {}
+        if arm_arg is None or arm_arg == "left":
+            res = _print_arm("LEFT", self.left_arm, idx)
+            results["left"] = res
+        if arm_arg is None or arm_arg == "right":
+            res = _print_arm("RIGHT", self.right_arm, idx)
+            results["right"] = res
+        return results if results else None
+
+    def cmd_set(self, *args: str):
+        """Переместить одиночный сустав до указанной координаты.
+
+        Формат: set [<left|right>] <joint_idx> <value>
+        Если arm_name не указан → по умолчанию левая рука.
+        """
+        if len(args) == 2:
+            arm_name = "left"
+            joint_idx_str, value_str = args
+        elif len(args) == 3:
+            arm_name, joint_idx_str, value_str = args
+            if arm_name not in {"left", "right"}:
+                logging.error("[SET] arm_name должен быть left|right")
+                return False
+        else:
+            logging.info("[SET] usage: set [left|right] <joint_idx> <value>")
+            return False
+
+        try:
+            joint_idx = int(joint_idx_str)
+            target_val = int(value_str)
+        except ValueError:
+            logging.error("[SET] joint_idx и value должны быть числами")
+            return False
+        if not 0 <= joint_idx <= 6:
+            logging.error("[SET] joint_idx вне диапазона 0-6")
+            return False
+
+        arm = self.left_arm if arm_name == "left" else self.right_arm
+        if arm is None:
+            logging.error("[SET] %s arm not initialised", arm_name.upper())
+            return False
+
+        curr = self._current_point(arm)
+        target_pt = list(curr)
+        target_pt[joint_idx] = target_val
+
+        # prepare and move
+        self._prepare_track_play(arm)
+        res = self._move_smooth(arm, target_pt)
+        try:
+            arm.ModeCtrl(ctrl_mode=0x00, move_mode=0x00)
+        except Exception:
+            pass
+        ok = getattr(res, "ok", False)
+        logging.info("[SET] result: %s", ok)
+        return ok
 
 
 # -------------------------------------------------------------------- MAIN

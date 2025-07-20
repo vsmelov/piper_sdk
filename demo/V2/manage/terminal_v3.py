@@ -313,6 +313,72 @@ class PiperTerminalV3:
             raise AttributeError(item)
         return _wrapper
 
+    # ----------------------- new get/set commands -----------------------
+    def cmd_get(self, *args):
+        """Получить текущие координаты.
+
+        Использование:
+            get                         – вывести coords обеих рук
+            get <side>                  – вывести coords указанной руки (left/right)
+            get <side> <joint_idx>      – coords конкретного сустава
+        """
+        if not args:
+            # both arms full coords
+            for label, proxy in (("LEFT", self.left), ("RIGHT", self.right)):
+                if proxy is None:
+                    continue
+                try:
+                    coords = proxy.cmd_get()
+                    logging.info("%s %s", label, coords)
+                except Exception:
+                    logging.exception("[GET] proxy error (%s)", label)
+            return
+
+        if args[0] not in {"left", "right"}:
+            logging.error("[GET] first arg must be 'left' or 'right'")
+            return
+        side = args[0]
+        proxy = self.left if side == "left" else self.right
+        if proxy is None:
+            logging.error("[GET] %s arm not initialised", side.upper())
+            return
+        if len(args) == 1:
+            # full coords for side
+            coords = proxy.cmd_get()
+            logging.info("%s %s", side.upper(), coords)
+            return
+        if len(args) == 2:
+            joint_idx = args[1]
+            try:
+                val = proxy.cmd_get(joint_idx)
+                logging.info("%s joint[%s] = %s", side.upper(), joint_idx, val)
+            except Exception:
+                logging.exception("[GET] failed to get joint")
+            return
+        logging.error("[GET] wrong args")
+
+    def cmd_set(self, *args):
+        """Установить координату одного сустава.
+
+        Использование: set <side> <joint_idx> <value>
+        """
+        if len(args) != 3:
+            logging.info("[SET] usage: set <left|right> <joint_idx> <value>")
+            return
+        side, joint_idx, value = args
+        if side not in {"left", "right"}:
+            logging.error("[SET] first arg must be 'left' or 'right'")
+            return
+        proxy = self.left if side == "left" else self.right
+        if proxy is None:
+            logging.error("[SET] %s arm not initialised", side.upper())
+            return
+        try:
+            ok = proxy.cmd_set(joint_idx, value)
+            logging.info("[SET] result: %s", ok)
+        except Exception:
+            logging.exception("[SET] proxy error")
+
     # ----------------------- lifecycle -----------------------
     def shutdown(self):
         for proxy in (self.left, self.right):
