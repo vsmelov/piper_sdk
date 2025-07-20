@@ -10,10 +10,10 @@ import argparse
 import logging
 import time
 
-from demo.V2.settings import CAN_NAME
+from demo.V2.settings import CAN_NAME, CAN_RIGHT, CAN_LEFT
 from interface.piper_interface_v2 import C_PiperInterface_V2 as SDK
 
-DEFAULT_CAN = CAN_NAME
+DEFAULT_CAN = CAN_RIGHT
 
 
 def _init_logger():

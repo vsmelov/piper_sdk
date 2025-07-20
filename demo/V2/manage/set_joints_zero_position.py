@@ -20,10 +20,10 @@ import time
 from pathlib import Path
 from typing import List
 
-from demo.V2.settings import CAN_NAME
+from demo.V2.settings import CAN_NAME, CAN_RIGHT, CAN_LEFT
 from interface.piper_interface_v2 import C_PiperInterface_V2 as SDK
 
-DEFAULT_CAN = CAN_NAME
+DEFAULT_CAN = CAN_RIGHT
 LOG_NAME = "set_zero.log"
 THRESH = 200  # 0.2° допуск
 WAIT_DISABLE_TIMEOUT = 5.0  # сек

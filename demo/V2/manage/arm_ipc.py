@@ -34,12 +34,30 @@ class _ArmWorkerProcess(Process):
 
     It listens on a *Connection* for JSON-serialisable command dictionaries and
     executes them sequentially. Designed to be started only via *ArmProxy*.
+
+    Parameters
+    ----------
+    can_name
+        CAN-interface name associated with this worker (e.g. "can0").
+    conn
+        End of *multiprocessing.Pipe* for IPC.
+    side
+        Which logical arm this worker controls: ``"left"`` or ``"right"``.
+        This is required because :class:`demo.V2.manage.terminal_v2.PiperTerminal`
+        expects the CAN for the left and right arm separately. When we launch a
+        *single-arm* worker we must make sure the provided CAN is passed to the
+        correct parameter and the other one is *None* so that internal helper
+        methods (``_arm_from_name`` etc.) work as expected for track names like
+        ``left__*`` / ``right__*``.
     """
 
-    def __init__(self, can_name: str, conn: Connection):
+    def __init__(self, can_name: str, conn: Connection, side: str = "left"):
         super().__init__(daemon=True)
+        if side not in {"left", "right"}:
+            raise ValueError("side must be 'left' or 'right'")
         self._can_name = can_name
         self._conn = conn
+        self._side = side
 
     # ---------------------------------------------------------------------
     # Process entry-point
@@ -55,7 +73,11 @@ class _ArmWorkerProcess(Process):
             # Import locally to keep fork-safety (SDK may init on import).
             from demo.V2.manage.terminal_v2 import PiperTerminal
 
-            term = PiperTerminal(left_can=self._can_name, right_can=None)
+            # Pass the CAN name to the appropriate argument according to *side*
+            if self._side == "left":
+                term = PiperTerminal(left_can=self._can_name, right_can=None)
+            else:  # "right"
+                term = PiperTerminal(left_can=None, right_can=self._can_name)
             logging.info("Arm worker started – CAN=%s", self._can_name)
         except Exception as exc:  # noqa: BLE001 – inside child
             logging.exception("FAILED to initialise PiperTerminal: %s", exc)
@@ -111,11 +133,28 @@ class ArmProxy:
    -воркер и выполняются там.
     """
 
-    def __init__(self, can_name: str):
+    def __init__(self, can_name: str, side: str = "left"):
+        """Create proxy controlling a single arm.
+
+        Parameters
+        ----------
+        can_name
+            CAN-interface associated with the arm (e.g. ``"can0"``).
+        side
+            Logical side of the robot this proxy controls – ``"left"`` or
+            ``"right"``. Defaults to ``"left"`` to preserve backward
+            compatibility. Supplying the correct side ensures that track names
+            like ``right__*`` are accepted by the underlying
+            :pyclass:`PiperTerminal`.
+        """
+
+        if side not in {"left", "right"}:
+            raise ValueError("side must be 'left' or 'right'")
+
         parent, child = Pipe()
         self._conn = parent
         # Pyright may complain about generic variance; safe to ignore.
-        self._proc = _ArmWorkerProcess(can_name, child)  # type: ignore[arg-type]
+        self._proc = _ArmWorkerProcess(can_name, child, side)  # type: ignore[arg-type]
         self._proc.start()
         self._req_id = 0  # simple incremental correlation id
 

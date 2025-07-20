@@ -31,11 +31,13 @@ class PiperTerminalV3:
     def __init__(self) -> None:
         self.left: Optional[ArmProxy] = None
         self.right: Optional[ArmProxy] = None
+        # Default duration for hybrid (r2) recording when user presses Enter
+        self._default_duration: float = 2.0
         if CAN_LEFT is not None:
-            self.left = ArmProxy(CAN_LEFT)
+            self.left = ArmProxy(CAN_LEFT, side="left")
             logging.info("Left arm proxy ready (%s)", CAN_LEFT)
         if CAN_RIGHT is not None:
-            self.right = ArmProxy(CAN_RIGHT)
+            self.right = ArmProxy(CAN_RIGHT, side="right")
             logging.info("Right arm proxy ready (%s)", CAN_RIGHT)
 
     # --------------------- util helpers ---------------------
@@ -73,11 +75,50 @@ class PiperTerminalV3:
     cmd_r = cmd_record  # type: ignore[assignment]
 
     def cmd_record_v2(self, *args):
+        """Start hybrid (v2) recording on correct arm with overwrite handled here."""
         if not args:
             logging.info("record_v2: требуется имя трека")
             return
-        proxy = self._proxy_for_track(args[0] if len(args) == 1 else args[0])
-        proxy.cmd_record_v2(*args)
+
+        full_name: str
+        if len(args) == 1:
+            full_name = args[0]
+        elif len(args) == 2:
+            parent, child = args
+            if "__" in child:
+                logging.info("В child_name запрещено '__'.")
+                return
+            full_name = f"{parent}__{child}"
+        else:
+            logging.info("record_v2: требуется 1 или 2 аргумента.")
+            return
+
+        # Resolve file paths
+        trk_path = _track_path(full_name)
+        details_path = trk_path.with_suffix(".details.json")
+
+        if trk_path.exists():
+            try:
+                ans = input(f"Файл {trk_path.name} уже существует. Перезаписать? [y/N] ").strip().lower()
+            except (EOFError, KeyboardInterrupt):
+                logging.info("Отмена.")
+                return
+            if ans != "y":
+                logging.info("Отмена.")
+                return
+            # Remove old files so что _confirm_overwrite в дочернем процессе не спросит снова
+            try:
+                trk_path.unlink()
+            except Exception:
+                pass
+            if details_path.exists():
+                try:
+                    details_path.unlink()
+                except Exception:
+                    pass
+
+        proxy = self._proxy_for_track(full_name)
+        proxy.cmd_record_v2(full_name)
 
     # alias
     cmd_r2 = cmd_record_v2  # type: ignore[assignment]
@@ -180,6 +221,38 @@ class PiperTerminalV3:
     def cmd_check_0_track(self):
         if self.left:
             self.left.cmd_check_0_track()
+
+    # --------------------------- reset commands ---------------------------
+    def cmd_reset(self, target: str = "all"):
+        self._cmd_reset_once(target)
+        self._cmd_reset_once(target)
+
+    def _cmd_reset_once(self, target: str = "all"):
+        """Reset arms.
+
+        Usage:
+            reset all   – обе руки
+            reset left  – только левая
+            reset right – только правая
+        По умолчанию сбрасываются обе руки.
+        """
+        target = target.lower() if isinstance(target, str) else "all"
+        if target in {"all", "both"}:
+            self._call_both("cmd_reset")
+            return
+        if target == "left":
+            if self.left:
+                self.left.cmd_reset()
+            else:
+                logging.warning("Left arm not initialised.")
+            return
+        if target == "right":
+            if self.right:
+                self.right.cmd_reset()
+            else:
+                logging.warning("Right arm not initialised.")
+            return
+        logging.error("reset: аргумент должен быть all/left/right")
 
     # --------------------------- Scene helpers ---------------------------
     def _track_duration(self, name: str) -> float | None:
@@ -394,6 +467,11 @@ class PiperTerminalV3:
             except (EOFError, KeyboardInterrupt):
                 print()
                 break
+            # ---------------- hybrid-recording special handling ----------------
+            if self._handle_hybrid_input(line):
+                # line consumed by hybrid handler
+                continue
+
             if not line:
                 continue
             tokens = line.split()
@@ -406,6 +484,65 @@ class PiperTerminalV3:
             except Exception:
                 logging.exception("Unhandled error")
         self.shutdown()
+
+    # ---------------- hybrid (r2) recording helpers -----------------
+    def _active_hybrid_proxy(self) -> Optional[ArmProxy]:
+        """Return the single proxy that is currently in hybrid recording mode.
+
+        If none or more than one proxies are recording – return None.
+        """
+        active = [p for p in (self.left, self.right) if p and p.is_hybrid_recording()]
+        if len(active) == 1:
+            return active[0]
+        if len(active) > 1:
+            logging.warning("Both arms are recording – specify left/right explicitly.")
+        return None
+
+    def _handle_hybrid_input(self, raw: str) -> bool:
+        """Intercept user input while r2 recording is active.
+
+        Returns True if *raw* was handled here and should not be processed as a
+        regular command.
+        """
+        proxy = self._active_hybrid_proxy()
+        if proxy is None:
+            return False  # no active hybrid recording
+
+        stripped = raw.strip()
+
+        # Stop recording
+        if stripped.lower() in {"s", "stop"}:
+            proxy.stop_hybrid_record()
+            return True
+
+        # Change default duration: "default <sec>"
+        parts = stripped.split()
+        if len(parts) == 2 and parts[0].lower() == "default":
+            try:
+                self._default_duration = float(parts[1])
+                logging.info("[HYB-REC] Новый default duration = %.3fs", self._default_duration)
+            except ValueError:
+                logging.warning("[HYB-REC] Неверное число")
+            return True
+
+        # Empty input => add point with default duration
+        if stripped == "":
+            proxy.add_hybrid_point(self._default_duration)
+            logging.info("[HYB-REC] + Точка (default %.3fs)", self._default_duration)
+            return True
+
+        # Single numeric token => duration
+        if len(parts) == 1:
+            try:
+                dur = float(parts[0])
+            except ValueError:
+                return False  # not handled, fall through
+            proxy.add_hybrid_point(dur)
+            logging.info("[HYB-REC] + Точка (%.3fs)", dur)
+            return True
+
+        # Anything else – not handled here
+        return False
 
 
 if __name__ == "__main__":

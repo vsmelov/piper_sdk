@@ -61,7 +61,7 @@ GRIPPER_EFFORT = 4000
 
 # DANGEROUS constant: how much the gripper will additionally squeeze during playback.
 # Value is a fraction; resulting gripper angle is reduced by this coefficient (tightening).
-GRIPPER_TIGHT_COEFFICEINT = 0.01  # ⚠️ changing this may break grasp reliability
+GRIPPER_TIGHT_COEFFICEINT = 0.05  # ⚠️ changing this may break grasp reliability
 
 # Заводская нулевая поза (6 суставов + захват) в единицах SDK (0.001° / 0.001 мм)
 ZERO_POSE: List[int] = [0, 0, 0, 0, 0, 0, 0]
@@ -152,10 +152,12 @@ class PiperTerminal:
 
     # Track implementation to use by default (can be overridden in subclasses)
     track_cls = TrackV2
+    # Default duration (seconds) for a control point when no duration is specified
+    DEFAULT_POINT_DURATION_SEC = 1.0
 
     def __init__(
-        self, 
-        left_can: Optional[str] = CAN_LEFT, 
+        self,
+        left_can: Optional[str] = CAN_LEFT,
         right_can: Optional[str] = CAN_RIGHT,
     ) -> None:
         # Инициализируем каждую руку отдельно и не падаем, если одна из них недоступна.
@@ -218,6 +220,11 @@ class PiperTerminal:
         # Remember CAN names for helper methods
         self._left_can = left_can
         self._right_can = right_can
+
+        # Current default duration (seconds) for new control points in hybrid recording.
+        # Can be changed at runtime with the "default <sec>" command.
+        self._default_point_duration: float = self.DEFAULT_POINT_DURATION_SEC
+
 
     def __dangerous_reset(self, arm, can_name):
         # это код полное говно, но работает
@@ -291,6 +298,9 @@ class PiperTerminal:
         arm.GripperCtrl(50_000, 1000, 0x01, 0)
         arm.ModeCtrl(0x01, 0x01, 50, 0x00)  # включаем контроль руки
         time.sleep(1)  # wait
+
+        # Вернём новую инстанцию, чтобы вызывающий код мог обновить self.left_arm / self.right_arm.
+        return arm
 
     # --------------------------------- util helpers ----------------------------------------------------
     def _confirm_overwrite(self, path: Path) -> bool:
@@ -376,9 +386,10 @@ class PiperTerminal:
             f"Δ={best_delta} units (~{best_delta/1000:.3f}°) | worst joint #{best_worst_joint} | point {best_pt}"
         )
 
-        logging.info("[SAFE] близко к safe-track, СБРОС")
-        self.__dangerous_reset(arm, can_name)
-        self.__dangerous_reset(arm, can_name)
+        # Сброс руками (dangerous_reset) теперь выполняется только по отдельной команде reset.
+        # logging.info("[SAFE] близко к safe-track, СБРОС")
+        # self.__dangerous_reset(arm, can_name)
+        # self.__dangerous_reset(arm, can_name)
         # эту штуку важно вызвать два раза иначе рука не напряжется (мне пока лень разбираться почему)
 
         # todo это не надо!
@@ -1268,6 +1279,8 @@ class PiperTerminal:
     def _effective_target(pt: List[int]) -> List[int]:
         """Return a copy of pt with tightening applied to gripper (index 6)."""
         eff = list(pt)
+        # eff[2] = int(eff[2] * 0.95)
+        # eff[4] = int(eff[4] * 1)
         if GRIPPER_TIGHT_COEFFICEINT > 0:
             eff[6] = int(eff[6] * (1 - GRIPPER_TIGHT_COEFFICEINT))
         return eff
@@ -1352,10 +1365,14 @@ class PiperTerminal:
     def cmd_p(self, *args: str):
         """Alias that acts as play OR add-point depending on context."""
         if self._hybrid_recording:
-            if len(args) != 1:
-                logging.info("[HYB-REC] требуется ровно 1 аргумент – duration в секундах.")
+            # If no duration is provided – use the default value
+            if len(args) == 0:
+                self._hybrid_add_point(str(self._default_point_duration))
+            elif len(args) == 1:
+                self._hybrid_add_point(args[0])
+            else:
+                logging.info("[HYB-REC] требуется максимум 1 аргумент – duration в секундах.")
                 return
-            self._hybrid_add_point(args[0])
         else:
             self.cmd_play(*args)
 
@@ -1500,6 +1517,27 @@ class PiperTerminal:
             s|stop    – finish recording
         """
         stripped = raw.strip().lower()
+
+        # Empty input (just Enter) – add point with current default duration
+        if stripped == "":
+            self._hybrid_add_point(str(self._default_point_duration))
+            return True
+
+        # Change the default duration: "default <sec>" command
+        tokens = stripped.split()
+        if tokens[0] == "default" and len(tokens) == 2:
+            try:
+                new_def = float(tokens[1])
+                if new_def < 0:
+                    raise ValueError
+            except ValueError:
+                logging.error("[HYB-REC] 'default' требует неотрицательное число секунд.")
+                return True  # handled (even if invalid)
+
+            self._default_point_duration = new_def
+            logging.info(f"[HYB-REC] Новое дефолтное duration = {new_def}s")
+            return True
+
         if stripped in {"s", "stop"}:
             self._stop_hybrid_recording()
             return True
@@ -1666,6 +1704,28 @@ class PiperTerminal:
         left_thread.join()
         right_thread.join()
         self._play_stop.set()
+
+    # --------------------------- manual reset commands ---------------------------
+    def cmd_reset_left(self):
+        """Опасный hard-reset только левой руки."""
+        if self.left_arm is None or self._left_can is None:
+            logging.warning("Left arm not initialised – nothing to reset.")
+            return
+        self.left_arm = self.__dangerous_reset(self.left_arm, self._left_can)
+
+    def cmd_reset_right(self):
+        """Опасный hard-reset только правой руки."""
+        if self.right_arm is None or self._right_can is None:
+            logging.warning("Right arm not initialised – nothing to reset.")
+            return
+        self.right_arm = self.__dangerous_reset(self.right_arm, self._right_can)
+
+    def cmd_reset(self):
+        """Hard-reset обеих рук (если доступны)."""
+        if self.left_arm and self._left_can:
+            self.left_arm = self.__dangerous_reset(self.left_arm, self._left_can)
+        if self.right_arm and self._right_can:
+            self.right_arm = self.__dangerous_reset(self.right_arm, self._right_can)
 
     # ------------------------------- direct coordinate helpers -------------------------------------------
     def cmd_get(self, *args: str):
