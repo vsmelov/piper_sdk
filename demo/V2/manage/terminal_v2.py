@@ -1275,6 +1275,8 @@ class PiperTerminal:
     def _effective_target(pt: List[int]) -> List[int]:
         """Return a copy of pt with tightening applied to gripper (index 6)."""
         eff = list(pt)
+        # eff[2] = int(eff[2] * 0.95)
+        # eff[4] = int(eff[4] * 1)
         if GRIPPER_TIGHT_COEFFICEINT > 0:
             eff[6] = int(eff[6] * (1 - GRIPPER_TIGHT_COEFFICEINT))
         return eff
