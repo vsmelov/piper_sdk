@@ -288,6 +288,9 @@ class PiperTerminal:
         arm.ModeCtrl(0x01, 0x01, 50, 0x00)  # включаем контроль руки
         time.sleep(1)  # wait
 
+        # Вернём новую инстанцию, чтобы вызывающий код мог обновить self.left_arm / self.right_arm.
+        return arm
+
     # --------------------------------- util helpers ----------------------------------------------------
     def _confirm_overwrite(self, path: Path) -> bool:
         """Спрашивает у пользователя подтверждение на перезапись файла."""
@@ -372,9 +375,10 @@ class PiperTerminal:
             f"Δ={best_delta} units (~{best_delta/1000:.3f}°) | worst joint #{best_worst_joint} | point {best_pt}"
         )
 
-        logging.info("[SAFE] близко к safe-track, СБРОС")
-        self.__dangerous_reset(arm, can_name)
-        self.__dangerous_reset(arm, can_name)
+        # Сброс руками (dangerous_reset) теперь выполняется только по отдельной команде reset.
+        # logging.info("[SAFE] близко к safe-track, СБРОС")
+        # self.__dangerous_reset(arm, can_name)
+        # self.__dangerous_reset(arm, can_name)
         # эту штуку важно вызвать два раза иначе рука не напряжется (мне пока лень разбираться почему)
 
         # todo это не надо!
@@ -1662,6 +1666,28 @@ class PiperTerminal:
         left_thread.join()
         right_thread.join()
         self._play_stop.set()
+
+    # --------------------------- manual reset commands ---------------------------
+    def cmd_reset_left(self):
+        """Опасный hard-reset только левой руки."""
+        if self.left_arm is None or self._left_can is None:
+            logging.warning("Left arm not initialised – nothing to reset.")
+            return
+        self.left_arm = self.__dangerous_reset(self.left_arm, self._left_can)
+
+    def cmd_reset_right(self):
+        """Опасный hard-reset только правой руки."""
+        if self.right_arm is None or self._right_can is None:
+            logging.warning("Right arm not initialised – nothing to reset.")
+            return
+        self.right_arm = self.__dangerous_reset(self.right_arm, self._right_can)
+
+    def cmd_reset(self):
+        """Hard-reset обеих рук (если доступны)."""
+        if self.left_arm and self._left_can:
+            self.left_arm = self.__dangerous_reset(self.left_arm, self._left_can)
+        if self.right_arm and self._right_can:
+            self.right_arm = self.__dangerous_reset(self.right_arm, self._right_can)
 
 
 # -------------------------------------------------------------------- MAIN

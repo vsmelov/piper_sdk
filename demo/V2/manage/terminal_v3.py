@@ -32,10 +32,10 @@ class PiperTerminalV3:
         self.left: Optional[ArmProxy] = None
         self.right: Optional[ArmProxy] = None
         if CAN_LEFT is not None:
-            self.left = ArmProxy(CAN_LEFT)
+            self.left = ArmProxy(CAN_LEFT, side="left")
             logging.info("Left arm proxy ready (%s)", CAN_LEFT)
         if CAN_RIGHT is not None:
-            self.right = ArmProxy(CAN_RIGHT)
+            self.right = ArmProxy(CAN_RIGHT, side="right")
             logging.info("Right arm proxy ready (%s)", CAN_RIGHT)
 
     # --------------------- util helpers ---------------------
@@ -180,6 +180,34 @@ class PiperTerminalV3:
     def cmd_check_0_track(self):
         if self.left:
             self.left.cmd_check_0_track()
+
+    # --------------------------- reset commands ---------------------------
+    def cmd_reset(self, target: str = "all"):
+        """Reset arms.
+
+        Usage:
+            reset all   – обе руки
+            reset left  – только левая
+            reset right – только правая
+        По умолчанию сбрасываются обе руки.
+        """
+        target = target.lower() if isinstance(target, str) else "all"
+        if target in {"all", "both"}:
+            self._call_both("cmd_reset")
+            return
+        if target == "left":
+            if self.left:
+                self.left.cmd_reset()
+            else:
+                logging.warning("Left arm not initialised.")
+            return
+        if target == "right":
+            if self.right:
+                self.right.cmd_reset()
+            else:
+                logging.warning("Right arm not initialised.")
+            return
+        logging.error("reset: аргумент должен быть all/left/right")
 
     # --------------------------- Scene helpers ---------------------------
     def _track_duration(self, name: str) -> float | None:
