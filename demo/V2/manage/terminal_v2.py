@@ -980,7 +980,7 @@ class PiperTerminal:
         """Один раз перед отправкой траектории настраиваем режим."""
         arm.EnableArm(7)
         arm.ModeCtrl(ctrl_mode=0x01, move_mode=0x01, move_spd_rate_ctrl=50)
-        time.sleep(0.02)
+        time.sleep(0.01)
 
     def _run_track(self, arm, data: List[TrackPoint], details=None, hz: int = 50):
         """Play the given trajectory with accuracy gating.
@@ -1458,6 +1458,16 @@ class PiperTerminal:
     def _run_timed_track(self, arm, trk_obj: TrackV3Timed, hz: int = 50):
         points = trk_obj.points
         durations = trk_obj.durations
+        if len(points) == 0:
+            logging.warning("[PLAY_V2] Трек пуст – ничего воспроизводить.")
+            return
+        if len(points) == 1:
+            # Просто прийти в эту точку
+            self._prepare_track_play(arm)
+            self._move_smooth(arm, points[0])
+            arm.ModeCtrl(ctrl_mode=0x00, move_mode=0x00)
+            logging.info("[PLAY_V2] 1-point track – движение выполнено.")
+            return
         if len(points) < 2:
             logging.warning("[PLAY_V2] Трек содержит <2 точек – нечего воспроизводить.")
             return
@@ -1740,9 +1750,11 @@ class PiperTerminal:
         Возвращает dict с результатами (для IPC).
         """
         # Helper to print for one arm
-        def _print_arm(label: str, arm, idx: int | None):
+        def _print_arm(label: str, arm, idx: int | None, explicit: bool):
             if arm is None:
-                logging.warning("[GET] %s arm not initialised", label)
+                # Если рука не запрошена явно – молча игнорируем.
+                if explicit:
+                    logging.info("[GET] %s arm not initialised", label)
                 return None
             pt = self._current_point(arm)
             if idx is None:
@@ -1778,10 +1790,10 @@ class PiperTerminal:
 
         results = {}
         if arm_arg is None or arm_arg == "left":
-            res = _print_arm("LEFT", self.left_arm, idx)
+            res = _print_arm("LEFT", self.left_arm, idx, explicit=(arm_arg is not None))
             results["left"] = res
         if arm_arg is None or arm_arg == "right":
-            res = _print_arm("RIGHT", self.right_arm, idx)
+            res = _print_arm("RIGHT", self.right_arm, idx, explicit=(arm_arg is not None))
             results["right"] = res
         return results if results else None
 
@@ -1832,6 +1844,133 @@ class PiperTerminal:
         ok = getattr(res, "ok", False)
         logging.info("[SET] result: %s", ok)
         return ok
+
+    def cmd_set_all(self, *args: str):
+        """Переместить ВСЕ суставы к заданным координатам.
+
+        Форматы:
+            set_all <c1> <c2> <c3> <c4> <c5> <c6> <c7>
+            set_all [c1, c2, ..., c7]
+        Возвращает True при успехе.
+        """
+        # Accept either already-parsed list or string tokens
+        if len(args) == 1 and isinstance(args[0], (list, tuple)):
+            coords = list(args[0])  # type: ignore[arg-type]
+        else:
+            # Concatenate tokens to handle brackets with spaces
+            joined = " ".join(str(a) for a in args).strip()
+            if joined.startswith("[") and joined.endswith("]"):
+                joined = joined[1:-1]
+            # Split by comma or whitespace
+            raw_parts = [p.strip() for part in joined.split(" ") for p in part.split(",") if p.strip()]
+            coords = raw_parts
+
+        if isinstance(coords, tuple):
+            coords = list(coords)
+        # Ensure 7 ints
+        if len(coords) != 7:
+            logging.error("[SET_ALL] требуется 7 координат, получено %d", len(coords))
+            return False
+        try:
+            coord_ints = [int(x) for x in coords]
+        except ValueError:
+            logging.error("[SET_ALL] все координаты должны быть числами")
+            return False
+
+        # Determine which arm exists (only one in this worker) – prefer left then right
+        arm = self.left_arm or self.right_arm
+        if arm is None:
+            logging.error("[SET_ALL] Arm not initialised")
+            return False
+
+        self._prepare_track_play(arm)
+        res = self._move_smooth(arm, coord_ints)
+        try:
+            arm.ModeCtrl(ctrl_mode=0x00, move_mode=0x00)
+        except Exception:
+            pass
+        ok = getattr(res, "ok", False)
+        logging.info("[SET_ALL] result: %s", ok)
+        return ok
+
+    def _relative_move(self, arm, joint_idx: int, delta: int):
+        """Internal helper: move selected joint by *delta* (units)."""
+        curr = self._current_point(arm)
+        if not 0 <= joint_idx <= 6:
+            logging.error("[REL] joint_idx вне диапазона 0-6")
+            return False
+        target = list(curr)
+        target[joint_idx] += delta
+        self._prepare_track_play(arm)
+        res = self._move_smooth(arm, target)
+        try:
+            arm.ModeCtrl(ctrl_mode=0x00, move_mode=0x00)
+        except Exception:
+            pass
+        ok = getattr(res, "ok", False)
+        return ok
+
+    def cmd_incr(self, *args: str):
+        """Увеличить координату сустава.
+
+        incr <joint_idx> <delta>    – изменить конкретный сустав
+        incr <delta>                – по умолчанию gripper (idx 6)
+        """
+        if not args:
+            logging.info("incr usage: incr [joint_idx] <delta>")
+            return
+        if len(args) == 1:
+            joint_idx = 6  # default gripper
+            delta_str = args[0]
+        else:
+            joint_idx = int(args[0])
+            delta_str = args[1]
+        try:
+            delta = int(delta_str)
+        except ValueError:
+            logging.error("delta must be int")
+            return
+        arm = self.left_arm or self.right_arm
+        if arm is None:
+            logging.error("arm not initialised")
+            return
+        ok = self._relative_move(arm, joint_idx, delta)
+        if ok:
+            pt = self._current_point(arm)
+            logging.info("[INCR] joint[%d] = %d", joint_idx, pt[joint_idx])
+            logging.info("[INCR] all %s", pt)
+        else:
+            logging.info("[INCR] result: False")
+        logging.info("[INCR] result: %s", ok)
+
+    def cmd_decr(self, *args: str):
+        """Уменьшить координату сустава (аналог incr с отрицательным delta)."""
+        if not args:
+            logging.info("decr usage: decr [joint_idx] <delta>")
+            return
+        if len(args) == 1:
+            joint_idx = 6
+            delta_str = args[0]
+        else:
+            joint_idx = int(args[0])
+            delta_str = args[1]
+        try:
+            delta = -int(delta_str)
+        except ValueError:
+            logging.error("delta must be int")
+            return
+        arm = self.left_arm or self.right_arm
+        if arm is None:
+            logging.error("arm not initialised")
+            return
+        ok = self._relative_move(arm, joint_idx, delta)
+        if ok:
+            pt = self._current_point(arm)
+            logging.info("[DECR] joint[%d] = %d", joint_idx, pt[joint_idx])
+            logging.info("[DECR] all %s", pt)
+        else:
+            logging.info("[DECR] result: False")
+        logging.info("[DECR] result: %s", ok)
 
 
 # -------------------------------------------------------------------- MAIN

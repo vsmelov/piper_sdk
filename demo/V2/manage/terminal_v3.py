@@ -33,6 +33,8 @@ class PiperTerminalV3:
         self.right: Optional[ArmProxy] = None
         # Default duration for hybrid (r2) recording when user presses Enter
         self._default_duration: float = 2.0
+        # store last 10 entered commands for quick repeat ("_", "__", ...)
+        self._cmd_history: list[str] = []
         if CAN_LEFT is not None:
             self.left = ArmProxy(CAN_LEFT, side="left")
             logging.info("Left arm proxy ready (%s)", CAN_LEFT)
@@ -42,6 +44,7 @@ class PiperTerminalV3:
 
     # --------------------- util helpers ---------------------
     def _proxy_for_track(self, name: str) -> ArmProxy:
+        name = self._canon_name(name)
         if name.startswith("left__"):
             if not self.left:
                 raise RuntimeError("Left arm not initialised")
@@ -68,8 +71,9 @@ class PiperTerminalV3:
         if not args:
             logging.info("record: требуется имя трека")
             return
-        proxy = self._proxy_for_track(args[0] if len(args) == 1 else args[0])
-        proxy.cmd_record(*args)
+        full = self._canon_name(args[0])
+        proxy = self._proxy_for_track(full)
+        proxy.cmd_record(full)
 
     # alias
     cmd_r = cmd_record  # type: ignore[assignment]
@@ -123,9 +127,16 @@ class PiperTerminalV3:
     # alias
     cmd_r2 = cmd_record_v2  # type: ignore[assignment]
 
-    def cmd_s(self):
-        """stop recording"""
-        self._call_both("cmd_s")
+    def cmd_s(self, *args):
+        """Dual-purpose alias:
+
+        • s           – stop recording (как раньше)
+        • s <args...> – alias for set <args...>
+        """
+        if args:
+            self.cmd_set(*args)
+        else:
+            self._call_both("cmd_s")
 
     # ----------------------- play -----------------------
     def cmd_play(self, *tracks: str):
@@ -133,6 +144,7 @@ class PiperTerminalV3:
             logging.info("play: требуется >=1 трек")
             return
         # Группируем треки по рукам
+        tracks = tuple(self._canon_name(t) for t in tracks)
         left_tracks: List[str] = []
         right_tracks: List[str] = []
         for t in tracks:
@@ -160,6 +172,8 @@ class PiperTerminalV3:
         if not left_track or not right_track:
             logging.info("pp: нужно 2 трека – левый и правый")
             return
+        left_track = self._canon_name(left_track)
+        right_track = self._canon_name(right_track)
         if not (left_track.startswith("left__") and right_track.startswith("right__")):
             logging.error("pp: треки должны начинаться с left__/right__")
             return
@@ -182,6 +196,7 @@ class PiperTerminalV3:
         if not tracks:
             logging.info("play_v2: требуется >=1 трек")
             return
+        tracks = tuple(self._canon_name(t) for t in tracks)
         left_tracks: List[str] = []
         right_tracks: List[str] = []
         for t in tracks:
@@ -192,7 +207,7 @@ class PiperTerminalV3:
             else:
                 logging.error("Неверное имя трека %s", t)
                 return
-        th = []
+        th: List[threading.Thread] = []
         if left_tracks and self.left:
             th.append(threading.Thread(target=self.left.cmd_play_v2, args=left_tracks, daemon=True))
         if right_tracks and self.right:
@@ -236,7 +251,7 @@ class PiperTerminalV3:
             reset right – только правая
         По умолчанию сбрасываются обе руки.
         """
-        target = target.lower() if isinstance(target, str) else "all"
+        target = self._norm_side(target) or target.lower()
         if target in {"all", "both"}:
             self._call_both("cmd_reset")
             return
@@ -274,6 +289,7 @@ class PiperTerminalV3:
     # --------------------------- Scene commands ---------------------------
     def cmd_scene_add(self, scene_name: str):
         from demo.V2.manage.scene import Scene, SceneElement  # local import
+        scene_name = self._canon_name(scene_name)
         if not scene_name.startswith("scene__"):
             logging.error("Scene name must start with 'scene__'")
             return
@@ -310,6 +326,7 @@ class PiperTerminalV3:
 
     def cmd_scene_show(self, scene_name: str):
         from demo.V2.manage.scene import Scene
+        scene_name = self._canon_name(scene_name)
         try:
             scene = Scene.load(scene_name)
         except Exception as exc:
@@ -333,6 +350,7 @@ class PiperTerminalV3:
 
     def cmd_scene_play(self, scene_name: str):
         from demo.V2.manage.scene import Scene, SceneElement
+        scene_name = self._canon_name(scene_name)
         try:
             scene = Scene.load(scene_name)
         except Exception as exc:
@@ -386,6 +404,35 @@ class PiperTerminalV3:
             raise AttributeError(item)
         return _wrapper
 
+    # ----------------------- alias helper -----------------------
+    @staticmethod
+    def _norm_side(token: str) -> str | None:
+        """Map l/r/a aliases to left/right/all."""
+        token = token.lower()
+        if token in {"left", "l"}:
+            return "left"
+        if token in {"right", "r"}:
+            return "right"
+        if token in {"all", "both", "a"}:
+            return "all"
+        return None
+
+    # ----------------- name canonicalisation -----------------
+    @staticmethod
+    def _canon_name(name: str) -> str:
+        """Convert short prefixes (l_, r_, scene_) to canonical double-underscore form."""
+        if name.startswith("l_"):
+            return "left__" + name[2:]
+        if name.startswith("left_"):
+            return "left__" + name[5:]
+        if name.startswith("r_"):
+            return "right__" + name[2:]
+        if name.startswith("right_"):
+            return "right__" + name[6:]
+        if name.startswith("scene_") and not name.startswith("scene__"):
+            return "scene__" + name[6:]
+        return name
+
     # ----------------------- new get/set commands -----------------------
     def cmd_get(self, *args):
         """Получить текущие координаты.
@@ -407,26 +454,35 @@ class PiperTerminalV3:
                     logging.exception("[GET] proxy error (%s)", label)
             return
 
-        if args[0] not in {"left", "right"}:
-            logging.error("[GET] first arg must be 'left' or 'right'")
+        side_norm = self._norm_side(args[0]) if args else None
+        if side_norm is None:
+            logging.error("[GET] first arg must be l/left or r/right")
             return
-        side = args[0]
+        side = side_norm
         proxy = self.left if side == "left" else self.right
         if proxy is None:
             logging.error("[GET] %s arm not initialised", side.upper())
             return
         if len(args) == 1:
             # full coords for side
-            coords = proxy.cmd_get()
+            try:
+                res = proxy.cmd_get()
+            except Exception:
+                logging.exception("[GET] proxy error")
+                return
+            # Worker returns dict {"left": .., "right": ..}
+            coords = res.get(side) if isinstance(res, dict) else res
             logging.info("%s %s", side.upper(), coords)
             return
         if len(args) == 2:
             joint_idx = args[1]
             try:
-                val = proxy.cmd_get(joint_idx)
-                logging.info("%s joint[%s] = %s", side.upper(), joint_idx, val)
+                res = proxy.cmd_get(joint_idx)
             except Exception:
                 logging.exception("[GET] failed to get joint")
+                return
+            val = res.get(side) if isinstance(res, dict) else res
+            logging.info("%s joint[%s] = %s", side.upper(), joint_idx, val)
             return
         logging.error("[GET] wrong args")
 
@@ -435,22 +491,90 @@ class PiperTerminalV3:
 
         Использование: set <side> <joint_idx> <value>
         """
-        if len(args) != 3:
-            logging.info("[SET] usage: set <left|right> <joint_idx> <value>")
+        # Two supported syntaxes:
+        #   set <side> <joint_idx> <value>
+        #   set <side> [list-of-7-ints]
+        if len(args) < 2:
+            logging.info("[SET] usage: set <left|right> <joint_idx> <value>   |   set <left|right> [list]")
             return
-        side, joint_idx, value = args
-        if side not in {"left", "right"}:
-            logging.error("[SET] first arg must be 'left' or 'right'")
+
+        side_norm = self._norm_side(args[0]) if args else None
+        if side_norm not in {"left", "right"}:
+            logging.error("[SET] first arg must be l/left or r/right")
             return
+        side = side_norm  # type: ignore[assignment]
         proxy = self.left if side == "left" else self.right
         if proxy is None:
             logging.error("[SET] %s arm not initialised", side.upper())
             return
+
+        # Try to detect multi-coordinate target (7 numbers).
+        token_list = args[1:]
+        # If first token starts with '[' join rest to parse easier
+        combined = " ".join(token_list).strip()
+        if combined.startswith("["):
+            # probably bracketed list, keep combined string
+            list_str = combined
+        else:
+            list_str = None
+
+        if list_str or len(token_list) >= 7:
+            # Attempt to parse coordinates list
+            try:
+                import json
+                coords = json.loads(list_str) if list_str else [int(t.rstrip(',').strip()) for t in token_list]
+            except Exception as exc:
+                logging.error("[SET] cannot parse coordinates list: %s", exc)
+                return
+            if not (isinstance(coords, list) and len(coords) == 7):
+                logging.error("[SET] list must contain 7 numbers")
+                return
+            try:
+                ok = proxy.cmd_set_all(coords)
+                logging.info("[SET] all result: %s", ok)
+            except Exception:
+                logging.exception("[SET] proxy error (set_all)")
+            return
+
+        # Case 2: joint_idx value
+        if len(args) != 3:
+            logging.info("[SET] usage: set <left|right> <joint_idx> <value>")
+            return
+        joint_idx, value = args[1], args[2]
         try:
-            ok = proxy.cmd_set(joint_idx, value)
+            ok = proxy.cmd_set(side, joint_idx, value)
             logging.info("[SET] result: %s", ok)
         except Exception:
             logging.exception("[SET] proxy error")
+
+    def cmd_incr(self, side: str, *args):
+        """Increment joint or gripper on selected arm.
+
+        incr <left|right> [joint_idx] <delta>
+        If joint_idx omitted – gripper (6).
+        """
+        side_n = self._norm_side(side)
+        proxy = self.left if side_n == "left" else self.right if side_n == "right" else None
+        if proxy is None:
+            logging.error("incr: first arg must be left/right and arm must be initialised")
+            return
+        proxy.cmd_incr(*args)
+
+    def cmd_decr(self, side: str, *args):
+        """Decrement joint (negative delta)."""
+        side_n = self._norm_side(side)
+        proxy = self.left if side_n == "left" else self.right if side_n == "right" else None
+        if proxy is None:
+            logging.error("decr: first arg must be left/right and arm must be initialised")
+            return
+        proxy.cmd_decr(*args)
+
+    # -------------- short command aliases (placed after definitions) --------------
+
+    cmd_g = cmd_get   # alias g → get
+    # cmd_s already overloaded above
+    cmd_i = cmd_incr  # alias i → incr
+    cmd_d = cmd_decr  # alias d → decr
 
     # ----------------------- lifecycle -----------------------
     def shutdown(self):
@@ -467,6 +591,18 @@ class PiperTerminalV3:
             except (EOFError, KeyboardInterrupt):
                 print()
                 break
+
+            # ---------------- quick history repeat '_' / '__' / ... --------
+            stripped = line.strip()
+            if stripped and set(stripped) == {'_'}:
+                n = len(stripped)
+                if 1 <= n <= len(self._cmd_history):
+                    line = self._cmd_history[-n]
+                    logging.info("↻ %s", line)
+                else:
+                    logging.warning("No command #%d in history", n)
+                    continue  # wait next input
+
             # ---------------- hybrid-recording special handling ----------------
             if self._handle_hybrid_input(line):
                 # line consumed by hybrid handler
@@ -483,6 +619,12 @@ class PiperTerminalV3:
                 logging.warning("Unknown command: %s", cmd)
             except Exception:
                 logging.exception("Unhandled error")
+
+            # Save to history (skip repeats consisting of underscores)
+            if line and set(line.strip()) != {'_'}:
+                self._cmd_history.append(line)
+                if len(self._cmd_history) > 10:
+                    self._cmd_history.pop(0)
         self.shutdown()
 
     # ---------------- hybrid (r2) recording helpers -----------------
