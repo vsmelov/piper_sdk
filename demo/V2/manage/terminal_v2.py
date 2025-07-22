@@ -4,7 +4,7 @@ import json
 import threading
 import time
 from pathlib import Path
-from typing import Dict, List, Optional, Callable, Tuple
+from typing import Dict, List, Optional, Callable, Tuple, Any
 import math
 from dataclasses import dataclass
 
@@ -54,6 +54,9 @@ TRACK_DIR.mkdir(exist_ok=True)
 
 SAFE_DIR = TRACK_DIR / "_safe"
 SAFE_DIR.mkdir(exist_ok=True)
+
+PAUSE_FILE = Path(__file__).parent / 'pause.txt'
+logging.info(f"[PAUSE_FILE] Using file: {PAUSE_FILE.resolve()}")
 
 ZERO_POS_PATH = SAFE_DIR / "zero_position.json"
 # The gripper torque, in 0.001 N/m. Range 0-5000 (corresponds 0-5 N/m)
@@ -225,6 +228,8 @@ class PiperTerminal:
         # Can be changed at runtime with the "default <sec>" command.
         self._default_point_duration: float = self.DEFAULT_POINT_DURATION_SEC
 
+        # Log pause-file location for the user (printed once at startup)
+        logging.info("[PAUSE_FILE] Using file: %s (write 1 to pause, 0 to resume)", PAUSE_FILE.resolve())
 
     def __dangerous_reset(self, arm, can_name):
         # это код полное говно, но работает
@@ -1002,10 +1007,15 @@ class PiperTerminal:
         started_at = time.time() if use_timestamps else None
         first_ts: float = data[0].coordinates_timestamp if use_timestamps else 0.0
 
+        paused_by_file = False  # remember state between iterations
+        
         for idx, tp in enumerate(data):
             if self._play_stop.is_set():
                 logging.info("[PLAY] Стоп запрошен – прерываем трек.")
                 break
+
+            # ----- pause handling -----
+            # (event-based pause removed)
 
             # Synchronize with original timing (best-effort) before gating
             if use_timestamps:
@@ -1069,6 +1079,25 @@ class PiperTerminal:
             if pct // 10 > last_pct // 10:
                 last_pct = pct
                 logging.info(f"[PLAY] progress {pct}% ({idx+1}/{total_pts})")
+
+            # External pause via pause.txt ----------------------------------------
+            if self._external_pause_active():
+                if not paused_by_file:
+                    try:
+                        arm.ModeCtrl(ctrl_mode=0x00, move_mode=0x00)
+                    except Exception:
+                        pass
+                    paused_by_file = True
+                    logging.debug("[PAUSE_FILE] Enter pause (track).")
+                while self._external_pause_active() and not self._play_stop.is_set():
+                    time.sleep(0.2)
+            if paused_by_file and not self._external_pause_active():
+                try:
+                    arm.ModeCtrl(ctrl_mode=0x01, move_mode=0x01, move_spd_rate_ctrl=50)
+                except Exception:
+                    pass
+                paused_by_file = False
+                logging.debug("[PAUSE_FILE] Resume (track).")
 
         arm.ModeCtrl(ctrl_mode=0x00, move_mode=0x00)
         if self._play_stop.is_set():
@@ -1483,8 +1512,31 @@ class PiperTerminal:
             steps = max(1, int(dur * hz))
             diffs = [(e - s) / steps for s, e in zip(start_pt, end_pt)]
 
+            paused_by_file = False
             for step in range(1, steps + 1):
                 pt = [int(start_pt[i] + diffs[i] * step) for i in range(7)]
+                # External pause file handling ---------------------------------
+                if self._external_pause_active():
+                    if not paused_by_file:
+                        # First detection – stop motion
+                        try:
+                            arm.ModeCtrl(ctrl_mode=0x00, move_mode=0x00)
+                        except Exception:
+                            pass
+                        paused_by_file = True
+                        logging.debug("[PAUSE_FILE] Enter pause (track).")
+                    # Stay in loop until unpaused or stop requested
+                    while self._external_pause_active() and not self._play_stop.is_set():
+                        time.sleep(0.2)
+                if paused_by_file and not self._external_pause_active():
+                    # Resume
+                    try:
+                        arm.ModeCtrl(ctrl_mode=0x01, move_mode=0x01, move_spd_rate_ctrl=50)
+                    except Exception:
+                        pass
+                    paused_by_file = False
+                    logging.debug("[PAUSE_FILE] Resume (track).")
+
                 self._send_point(arm, pt)
                 if self._play_stop.is_set():
                     logging.info("[PLAY_V2] Стоп запрошен – прерываю текущий сегмент.")
@@ -1972,6 +2024,23 @@ class PiperTerminal:
         else:
             logging.info("[DECR] result: False")
         logging.info("[DECR] result: %s", ok)
+
+    # ---------------- external pause helper ----------------
+    @staticmethod
+    def _external_pause_active() -> bool:
+        """Return True if pause.txt contains exactly '1'.
+
+        Any other content (including absence of file) is treated as *no pause* so
+        that intermediate edit states do not block playback.
+        """
+        try:
+            value = PAUSE_FILE.read_text().strip()
+            # logging.info("[PAUSE_FILE] check %s -> %r", PAUSE_FILE.resolve(), value)
+            return value == "1"
+        except Exception as e:
+            # On read errors act as if not paused.
+            logging.exception(f"[PAUSE_FILE] error: {e}")
+            return False
 
 
 # -------------------------------------------------------------------- MAIN

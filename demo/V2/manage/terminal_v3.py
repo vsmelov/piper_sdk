@@ -370,7 +370,28 @@ class PiperTerminalV3:
                 if stop_flag.is_set():
                     break
                 if el.type == "pause":
-                    time.sleep(el.duration or 0)
+                    # Respect external pause.txt (same semantics as in terminal_v2)
+                    target_dur = float(el.duration or 0)
+                    slept = 0.0
+                    chk = 0.2  # poll interval
+
+                    def _external_pause_active() -> bool:
+                        from pathlib import Path
+                        pf = Path(__file__).parent / "pause.txt"
+                        try:
+                            val = pf.read_text().strip()
+                            logging.debug("[PAUSE_FILE] scene check %s -> %r", pf, val)
+                            return val == "1"
+                        except Exception:
+                            return False
+
+                    while slept < target_dur and not stop_flag.is_set():
+                        if _external_pause_active():
+                            time.sleep(chk)
+                            continue  # do NOT accumulate
+                        step = min(chk, target_dur - slept)
+                        time.sleep(step)
+                        slept += step
                     continue
                 track_name = el.name
                 if not track_name:
