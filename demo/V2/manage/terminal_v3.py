@@ -427,7 +427,7 @@ class PiperTerminalV3:
             return "left__" + name[5:]
         if name.startswith("r_"):
             return "right__" + name[2:]
-        if name.startswith("right_"):
+        if name.startswith("right_") and not name.startswith("right__"):
             return "right__" + name[6:]
         if name.startswith("scene_") and not name.startswith("scene__"):
             return "scene__" + name[6:]

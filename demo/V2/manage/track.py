@@ -302,6 +302,33 @@ class TrackV3Timed(TrackBase):
             if "pt" not in item or "duration" not in item:
                 raise ValueError(f"Each point entry must contain 'pt' and 'duration' (idx={idx})")
 
+    @property
+    def speed_up(self):
+        if self.name == 'left__open_door':
+            return 0.3
+        elif self.name == 'right__open_door':
+            return 0.1
+        elif self.name == 'right__meat':
+            return 0
+        elif self.name == 'right__close_door':
+            return 0.1
+        elif self.name == 'left__close_door':
+            return 0.25
+        elif self.name == 'left__colba1':
+            return 0.3
+        elif self.name == 'left__lopatka2_open':
+            return 0.36
+        elif self.name == 'left__lopatka2_mix':
+            return 0.36
+        elif self.name == 'left__lopatka2_close':
+            return 0.36
+        elif self.name == 'left__colba_suhtrav':
+            return 0
+        elif self.name == 'left__colba_svezhtrav':
+            return 0
+        else:
+            return 0
+
     # -------------------------------- helpers -----------------------
     @property
     def points(self) -> List[List[int]]:

@@ -57,11 +57,11 @@ SAFE_DIR.mkdir(exist_ok=True)
 
 ZERO_POS_PATH = SAFE_DIR / "zero_position.json"
 # The gripper torque, in 0.001 N/m. Range 0-5000 (corresponds 0-5 N/m)
-GRIPPER_EFFORT = 4000
+GRIPPER_EFFORT = 5000
 
 # DANGEROUS constant: how much the gripper will additionally squeeze during playback.
 # Value is a fraction; resulting gripper angle is reduced by this coefficient (tightening).
-GRIPPER_TIGHT_COEFFICEINT = 0.05  # ⚠️ changing this may break grasp reliability
+GRIPPER_TIGHT_COEFFICEINT = 0.075  # ⚠️ changing this may break grasp reliability
 
 # Заводская нулевая поза (6 суставов + захват) в единицах SDK (0.001° / 0.001 мм)
 ZERO_POSE: List[int] = [0, 0, 0, 0, 0, 0, 0]
@@ -428,7 +428,7 @@ class PiperTerminal:
                     return True
         return False
 
-    def _safe_move_smooth(self, arm, target_pt) -> bool:
+    def _safe_move_smooth(self, arm, target_pt, steps=25) -> bool:
         """Безопасный вариант _move_smooth. Выполняется только если рука уже находится
         рядом с одной из безопасных поз (Zero-track). Возвращает True если движение
         начато, False если отказано (небезопасно).
@@ -436,7 +436,7 @@ class PiperTerminal:
         # if not self._is_near_zero_track(arm):
         #     logging.error("[SAFE-MOVE] Current pose is not near any Zero-track. Aborting move.")
         #     return False
-        self._move_smooth(arm, target_pt)
+        self._move_smooth(arm, target_pt, steps=steps)
         return True
 
     # --------------------------------- math helpers ---------------------------------------------------
@@ -1401,10 +1401,10 @@ class PiperTerminal:
         # Safety pre-checks (reuse existing helpers)
         arm0 = self._arm_from_name(tracks[0])
         arm0_can = self._arm_can_from_name(tracks[0])
-        res = self._maybe_reset_from_safe_pose_and_move_to_0(arm0, arm0_can)
-        if not res.ok:
-            logging.error(f"[PLAY_V2] Предусловия безопасности не выполнены: {res.error}")
-            return
+        # res = self._maybe_reset_from_safe_pose_and_move_to_0(arm0, arm0_can)
+        # if not res.ok:
+        #     logging.error(f"[PLAY_V2] Предусловия безопасности не выполнены: {res.error}")
+        #     return
 
         # Move to first control point if needed
         first_pts_obj = TrackBase.read_track(tracks[0])
@@ -1414,7 +1414,7 @@ class PiperTerminal:
         first_pt = first_pts_obj.points[0]
         if not self._is_close_ignored(self._current_point(arm0), first_pt):
             logging.info("[PLAY_V2] Перемещаю робот в начальную точку…")
-            if not self._safe_move_smooth(arm0, first_pt):
+            if not self._safe_move_smooth(arm0, first_pt, steps=25):
                 logging.error("[PLAY_V2] Движение к стартовой точке отменено (небезопасно).")
                 return
             time.sleep(0.2)
@@ -1435,15 +1435,15 @@ class PiperTerminal:
             if self._play_stop.is_set():
                 logging.info("[PLAY_V2] Стоп запрошен – останавливаем дальнейшие треки.")
                 break
-            if i < len(tracks) - 1:
-                logging.info(f"…пауза {DELAY_BETWEEN_TRACKS} c…")
-                for _ in range(DELAY_BETWEEN_TRACKS * 10):
-                    if self._play_stop.is_set():
-                        break
-                    time.sleep(0.1)
-                if self._play_stop.is_set():
-                    logging.info("[PLAY_V2] Стоп запрошен во время паузы – прерываем.")
-                    break
+            # if i < len(tracks) - 1:
+            #     logging.info(f"…пауза {DELAY_BETWEEN_TRACKS} c…")
+            #     for _ in range(DELAY_BETWEEN_TRACKS * 10):
+            #         if self._play_stop.is_set():
+            #             break
+            #         time.sleep(0.1)
+            #     if self._play_stop.is_set():
+            #         logging.info("[PLAY_V2] Стоп запрошен во время паузы – прерываем.")
+            #         break
 
         logging.info("✓ Воспроизведение v2 завершено.")
         self._play_thread = None
@@ -1478,7 +1478,8 @@ class PiperTerminal:
         for idx in range(1, len(points)):
             start_pt = points[idx - 1]
             end_pt = points[idx]
-            dur = float(durations[idx])  # duration associated with this target
+            logging.info(f'playing point #{idx}: {end_pt}')
+            dur = float(durations[idx] * (1 - trk_obj.speed_up))  # duration associated with this target
             steps = max(1, int(dur * hz))
             diffs = [(e - s) / steps for s, e in zip(start_pt, end_pt)]
 

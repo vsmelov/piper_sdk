@@ -5,9 +5,12 @@
 
 import time
 from piper_sdk import *
+from settings import CAN_LEFT, CAN_RIGHT
+
+USE_CAN_NAME = CAN_RIGHT
 
 if __name__ == "__main__":
-    piper = C_PiperInterface_V2("can0")
+    piper = C_PiperInterface_V2(USE_CAN_NAME)
     piper.ConnectPort()
     piper.GripperCtrl(0,1000,0x00, 0)
     time.sleep(1.5)
