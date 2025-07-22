@@ -310,6 +310,12 @@ class TrackV3Timed(TrackBase):
             return 0.1
         elif self.name == 'right__meat':
             return 0
+        elif self.name == 'right__tomat':
+            return 0.37
+        elif self.name == 'right__salt':
+            return 0.2
+        elif self.name == 'right__cheese':
+            return 0.15
         elif self.name == 'right__close_door':
             return 0.1
         elif self.name == 'left__close_door':

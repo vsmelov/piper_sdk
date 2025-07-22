@@ -3,6 +3,8 @@ left__colba1
 
 left__eblan1
 
+left__lopatka1
+
 left__lopatka2_open
 left__lopatka2_mix
 left__lopatka2_close
@@ -23,3 +25,8 @@ right__open_door
 right__blender1
 right__meat
 right__close_door
+right__lapsha
+right__tomat
+right__salt
+right__cheese
+right__lapsha_out

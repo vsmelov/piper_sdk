@@ -686,6 +686,45 @@ class PiperTerminalV3:
         # Anything else – not handled here
         return False
 
+    def cmd_list_timed(self):
+        """List all TrackV3Timed tracks with point count and effective duration.
+
+        For each v3 timed track found in the tracks directory prints:
+            • track name
+            • number of control points
+            • total duration taking into account ``speed_up`` (as used during
+              playback: ``dur * (1 - speed_up)`` for each segment).
+        """
+        from demo.V2.manage.track import TRACK_DIR, TrackBase, TrackV3Timed  # local import to avoid cycles
+
+        timed_tracks = []  # (name, pts_cnt, duration, speed_up)
+        for json_path in TRACK_DIR.glob("*.json"):
+            name = json_path.stem
+            try:
+                trk_obj = TrackBase.read_track(name)
+            except Exception:
+                # Skip unreadable/invalid tracks silently
+                continue
+            if isinstance(trk_obj, TrackV3Timed):
+                pts_cnt = len(trk_obj.points)
+                # First duration value (index 0) corresponds to the first point
+                # and is ignored during playback, so mirror that logic here.
+                eff_duration = sum(
+                    dur * (1 - trk_obj.speed_up) for dur in trk_obj.durations[1:]
+                )
+                timed_tracks.append((name, pts_cnt, eff_duration, trk_obj.speed_up))
+
+        if not timed_tracks:
+            logging.info("[LIST_TIMED] Нет треков v3 (timed).")
+            return
+
+        logging.info("[LIST_TIMED] Найдено %d трек(ов) v3:", len(timed_tracks))
+        for name, pts_cnt, eff_dur, spdup in sorted(timed_tracks):
+            logging.info("%s :: %d pts, duration=%.2fs (speed_up=%.2f)", name, pts_cnt, eff_dur, spdup)
+
+    # alias for convenience
+    cmd_lt = cmd_list_timed  # type: ignore[assignment]
+
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
