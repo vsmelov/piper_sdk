@@ -1,0 +1,23 @@
+{
+  "version": "scene_v1",
+  "left": [
+    {
+      "type": "track",
+      "name": "left__t7"
+    },
+    {
+      "type": "track",
+      "name": "left__t8"
+    }
+  ],
+  "right": [
+    {
+      "type": "track",
+      "name": "right__t7"
+    },
+    {
+      "type": "track",
+      "name": "right__t8"
+    }
+  ]
+}

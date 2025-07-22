@@ -1,0 +1,31 @@
+{
+  "version": "scene_v1",
+  "left": [
+    {
+      "type": "track",
+      "name": "left__x"
+    },
+    {
+      "type": "pause",
+      "duration": 5.0
+    },
+    {
+      "type": "track",
+      "name": "left__z"
+    }
+  ],
+  "right": [
+    {
+      "type": "pause",
+      "duration": 3.0
+    },
+    {
+      "type": "track",
+      "name": "right__1"
+    },
+    {
+      "type": "track",
+      "name": "right__t9"
+    }
+  ]
+}
