@@ -1,0 +1,24 @@
+{
+  "version": "scene_v1",
+  "left": [
+    {"type": "pause", "duration": 65},
+    {
+      "type": "track",
+      "name": "left__lopatka2_open_faster"
+    },
+    {
+      "type": "track",
+      "name": "left__lopatka2_mix_faster"
+    },
+    {
+      "type": "track",
+      "name": "left__lopatka2_close_faster"
+    }
+  ],
+  "right": [
+    {
+      "type": "track",
+      "name": "right__salt"
+    }
+  ]
+}

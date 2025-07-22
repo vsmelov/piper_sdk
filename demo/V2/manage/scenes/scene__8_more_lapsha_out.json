@@ -1,0 +1,23 @@
+{
+  "version": "scene_v1",
+  "left": [
+    {
+      "type": "track",
+      "name": "left__colba_suhtrav"
+    },
+    {
+      "type": "track",
+      "name": "left__colba_svezhtrav"
+    }
+  ],
+  "right": [
+    {
+      "type": "track",
+      "name": "right__cheese"
+    },
+    {
+      "type": "track",
+      "name": "right__lapsha_out"
+    }
+  ]
+}

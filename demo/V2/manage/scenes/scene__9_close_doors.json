@@ -1,0 +1,15 @@
+{
+  "version": "scene_v1",
+  "left": [
+    {
+      "type": "track",
+      "name": "left__close_door"
+    }
+  ],
+  "right": [
+    {
+      "type": "track",
+      "name": "right__close_door"
+    }
+  ]
+}

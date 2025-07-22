@@ -1,5 +1,5 @@
 left__open_door
-left__colba1
+left__colba1  #maslo
 
 left__eblan1
 
@@ -24,9 +24,69 @@ left__close_door
 right__open_door
 right__blender1
 right__meat
-right__close_door
+
 right__lapsha
 right__tomat
 right__salt
 right__cheese
 right__lapsha_out
+
+right__close_door
+
+
+
+
+
+
+
+
+
+
+
+left__open_door
+right__open_door
+
+left__colba1  #maslo
+right__blender1
+
+left__eblan1
+left__lopatka1
+
+AFTER
+
+right__meat
+
+AFTER
+
+left__lopatka2_open
+left__lopatka2_mix
+left__lopatka2_close
+right__lapsha
+
+AFTER
+
+#6
+left__vino1
+right__tomat
+
+AFTER
+
+left__lopatka2_open
+left__lopatka3_mix
+left__lopatka2_close
+right__salt
+
+AFTER
+
+left__colba_suhtrav
+right__cheese
+left__colba_svezhtrav
+right__lapsha_out
+
+AFTER
+
+left__close_door
+right__close_door
+
+
+scene_play scene__1_open_doors scene__2_maslo_blender scene__3_meat_lopatka scene__5_mix_lapsha scene__6_vino_tomat scene__7_mix_salt scene__8_more_lapsha_out scene__9_close_doors

@@ -1,0 +1,19 @@
+{
+  "version": "scene_v1",
+  "left": [
+    {
+      "type": "track",
+      "name": "left__lopatka1"
+    }
+  ],
+  "right": [
+    {
+      "type": "pause",
+      "duration": 70
+    },
+    {
+      "type": "track",
+      "name": "right__meat"
+    }
+  ]
+}

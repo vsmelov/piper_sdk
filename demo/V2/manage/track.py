@@ -305,15 +305,19 @@ class TrackV3Timed(TrackBase):
     @property
     def speed_up(self):
         if self.name == 'left__open_door':
-            return 0.3
-        elif self.name == 'right__open_door':
-            return 0.1
-        elif self.name == 'right__meat':
             return 0
+        elif self.name == 'left__lopatka1':
+            return 0.15
+        elif self.name == 'right__open_door':
+            return 0.3
+        elif self.name == 'right__meat':
+            return 0.2
         elif self.name == 'right__tomat':
-            return 0.37
+            return 0.47
         elif self.name == 'right__salt':
             return 0.2
+        elif self.name == 'right__lapsha':
+            return 0.3
         elif self.name == 'right__cheese':
             return 0.15
         elif self.name == 'right__close_door':
@@ -323,11 +327,17 @@ class TrackV3Timed(TrackBase):
         elif self.name == 'left__colba1':
             return 0.3
         elif self.name == 'left__lopatka2_open':
-            return 0.36
+            return 0.6
         elif self.name == 'left__lopatka2_mix':
-            return 0.36
+            return 0.6
         elif self.name == 'left__lopatka2_close':
-            return 0.36
+            return 0.6
+        elif self.name == 'left__lopatka2_open_faster':
+            return 0.6
+        elif self.name == 'left__lopatka2_mix_faster':
+            return 0.6
+        elif self.name == 'left__lopatka2_close_faster':
+            return 0.6
         elif self.name == 'left__colba_suhtrav':
             return 0
         elif self.name == 'left__colba_svezhtrav':

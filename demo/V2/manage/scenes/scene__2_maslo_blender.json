@@ -1,0 +1,19 @@
+{
+  "version": "scene_v1",
+  "left": [
+    {
+      "type": "track",
+      "name": "left__colba1"
+    }
+  ],
+  "right": [
+    {
+      "type": "pause",
+      "duration": 60
+    },
+    {
+      "type": "track",
+      "name": "right__blender1"
+    }
+  ]
+}

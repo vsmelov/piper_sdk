@@ -1,0 +1,16 @@
+{
+  "version": "scene_v1",
+  "left": [
+    {"type": "pause", "duration": 9},
+    {
+      "type": "track",
+      "name": "left__vino1"
+    }
+  ],
+  "right": [
+    {
+      "type": "track",
+      "name": "right__tomat"
+    }
+  ]
+}

@@ -348,13 +348,17 @@ class PiperTerminalV3:
                     logging.info("track %s (%.2fs) (t=%.2f→%.2f)", item.name, dur, start, start + dur)
                     t_cursor += dur
 
-    def cmd_scene_play(self, scene_name: str):
-        from demo.V2.manage.scene import Scene, SceneElement
+    def _scene_play_once(self, scene_name: str):
+        """Play a single scene *scene_name* synchronously.
+
+        Internal helper used by cmd_scene_play to support sequential playback.
+        """
+        from demo.V2.manage.scene import Scene, SceneElement  # local import to avoid cycles
         scene_name = self._canon_name(scene_name)
         try:
             scene = Scene.load(scene_name)
         except Exception as exc:
-            logging.error("Failed to load scene: %s", exc)
+            logging.error("Failed to load scene '%s': %s", scene_name, exc)
             return
 
         stop_flag = threading.Event()
@@ -371,8 +375,7 @@ class PiperTerminalV3:
                 track_name = el.name
                 if not track_name:
                     continue
-                # Determine play method based on track type
-                from demo.V2.manage.track import TrackBase, TrackV3Timed  # local import
+                from demo.V2.manage.track import TrackBase, TrackV3Timed
                 trk_obj = TrackBase.read_track(track_name)
                 try:
                     if isinstance(trk_obj, TrackV3Timed):
@@ -388,6 +391,23 @@ class PiperTerminalV3:
         th_right.start()
         th_left.join()
         th_right.join()
+
+    def cmd_scene_play(self, *scene_names: str):
+        """Play one or several scenes sequentially.
+
+        Usage:
+            scene_play <scene1> [scene2 ...]
+
+        Scenes are executed back-to-back without extra delay; the next scene
+        starts immediately after the previous one completes.
+        """
+        if not scene_names:
+            logging.info("scene_play: требуется ≥1 имя сцены")
+            return
+
+        for idx, sc_name in enumerate(scene_names, 1):
+            logging.info("[SCENE PLAY] %d/%d → %s", idx, len(scene_names), sc_name)
+            self._scene_play_once(sc_name)
 
     # ----------------------- generic fallback -----------------------
     def __getattr__(self, item):

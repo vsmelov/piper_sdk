@@ -1,0 +1,23 @@
+{
+  "version": "scene_v1",
+  "left": [
+    {
+      "type": "track",
+      "name": "left__lopatka2_open"
+    },
+    {
+      "type": "track",
+      "name": "left__lopatka2_mix"
+    },
+    {
+      "type": "track",
+      "name": "left__lopatka2_close"
+    }
+  ],
+  "right": [
+    {
+      "type": "track",
+      "name": "right__lapsha"
+    }
+  ]
+}
